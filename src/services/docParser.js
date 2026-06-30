@@ -1,17 +1,31 @@
 import mammoth from 'mammoth'
 import * as pdfjsLib from 'pdfjs-dist'
+import * as XLSX from 'xlsx'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 
 /**
- * Парсит DOCX / PDF / TXT и возвращает { text: string, warnings: string[] }
+ * Парсит DOCX / PDF / TXT / XLSX / XLS и возвращает { text: string, warnings: string[] }
  */
 export async function parseFile(file) {
   const ext = file.name.split('.').pop().toLowerCase()
   const warnings = []
   let text = ''
 
-  if (ext === 'docx') {
+  if (ext === 'xlsx' || ext === 'xls') {
+    const ab = await file.arrayBuffer()
+    const wb = XLSX.read(ab, { type: 'array' })
+    const parts = []
+    for (const name of wb.SheetNames) {
+      const ws = wb.Sheets[name]
+      const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false })
+      if (csv.trim()) parts.push(`=== Лист: ${name} ===\n${csv}`)
+    }
+    text = parts.join('\n\n')
+    if (wb.SheetNames.length > 1)
+      warnings.push(`Книга содержит ${wb.SheetNames.length} листа(ов): ${wb.SheetNames.join(', ')}`)
+
+  } else if (ext === 'docx') {
     const ab = await file.arrayBuffer()
     const result = await mammoth.extractRawText({ arrayBuffer: ab })
     text = result.value

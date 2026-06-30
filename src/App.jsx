@@ -23,7 +23,7 @@ const SECTION_LABELS = {
   'tz-analysis':  'Анализ ТЗ',
 }
 
-const TZ_MIME = /^(application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/pdf|text\/plain)/
+const TZ_MIME = /^(application\/vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|spreadsheetml\.sheet)|application\/(pdf|vnd\.ms-excel)|text\/plain)/
 
 const BTI_MIME = /^(application\/pdf|image\/)/
 
@@ -53,7 +53,7 @@ export default function App() {
       setActiveSection('bim')
     } else if (activeSection === 'building' && BTI_MIME.test(file.type)) {
       setBtiPendingFile(file)
-    } else if (activeSection === 'tz-analysis' && (TZ_MIME.test(file.type) || /\.(docx|txt)$/i.test(file.name))) {
+    } else if (activeSection === 'tz-analysis' && (TZ_MIME.test(file.type) || /\.(docx|xlsx|xls|txt)$/i.test(file.name))) {
       setTzPendingFile(file)
     }
   }, [setBimPendingFile, setBtiPendingFile, setTzPendingFile, setActiveSection, activeSection])

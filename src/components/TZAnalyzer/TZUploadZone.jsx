@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react'
 
-const ACCEPT = '.docx,.pdf,.txt'
-const ACCEPT_MIME = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/pdf', 'text/plain']
+const ACCEPT = '.docx,.pdf,.txt,.xlsx,.xls'
 
 export default function TZUploadZone({ onFile }) {
   const [drag, setDrag] = useState(false)
@@ -52,7 +51,7 @@ export default function TZUploadZone({ onFile }) {
           <div style={{ fontSize: 13, color: '#64748B', lineHeight: 1.6 }}>
             Перетащите сюда или нажмите для выбора
             <br />
-            <strong>DOCX</strong>, <strong>PDF</strong> или <strong>TXT</strong>
+            <strong>DOCX</strong>, <strong>XLSX</strong>, <strong>PDF</strong> или <strong>TXT</strong>
           </div>
         </div>
 
@@ -60,7 +59,7 @@ export default function TZUploadZone({ onFile }) {
           display: 'flex', gap: 8,
           fontSize: 11, color: '#94A3B8', letterSpacing: '.3px',
         }}>
-          {['DOCX', 'PDF', 'TXT'].map(fmt => (
+          {['DOCX', 'XLSX', 'XLS', 'PDF', 'TXT'].map(fmt => (
             <span key={fmt} style={{ background: '#F1F5F9', borderRadius: 6, padding: '3px 10px' }}>{fmt}</span>
           ))}
         </div>
