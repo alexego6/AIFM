@@ -228,13 +228,14 @@ export default function BTIRecognizer({ onClose }) {
     clearBti,
   } = useAppStore()
 
-  const [isDrag,      setIsDrag]      = useState(false)
-  const [loading,     setLoading]     = useState(false)
-  const [loadMsg,     setLoadMsg]     = useState('')
-  const [error,       setError]       = useState(null)
-  const [pendingRoom, setPendingRoom] = useState(null)
-  const [selectedNum, setSelectedNum] = useState(null)
-  const [exLoading,   setExLoading]   = useState(false)
+  const [isDrag,        setIsDrag]        = useState(false)
+  const [loading,       setLoading]       = useState(false)
+  const [loadMsg,       setLoadMsg]       = useState('')
+  const [error,         setError]         = useState(null)
+  const [pendingRoom,   setPendingRoom]   = useState(null)
+  const [selectedNum,   setSelectedNum]   = useState(null)
+  const [exLoading,     setExLoading]     = useState(false)
+  const [stagedFiles,   setStagedFiles]   = useState([])   // файлы экспликации до запуска распознавания
 
   const planImgRef   = useRef(null)
   const exInputRef   = useRef(null)
@@ -293,22 +294,26 @@ export default function BTIRecognizer({ onClose }) {
     } finally { setLoading(false); setLoadMsg('') }
   }, [setBtiPlanImage, setBtiRooms])
 
-  // ── обработка экспликации ─────────────────────────────────────────────────
-  const processExplication = useCallback(async file => {
-    setExLoading(true)
+  // ── обработка экспликации (все staged-файлы за один запуск) ──────────────
+  const processAllExplications = useCallback(async () => {
+    if (stagedFiles.length === 0) return
+    setExLoading(true); setError(null)
+    const files = [...stagedFiles]
+    setStagedFiles([])
     try {
-      const canvases = file.type === 'application/pdf'
-        ? await pdfAllPages(file, 1.5)
-        : [await fileToCanvas(file, 1.5)]
-
-      for (const c of canvases) {
-        const rooms = await extractRooms(toDataUrl(c, 0.85).split(',')[1], 'image/jpeg')
-        if (Array.isArray(rooms)) mergeBtiRooms(rooms)
+      for (const file of files) {
+        const canvases = file.type === 'application/pdf'
+          ? await pdfAllPages(file, 1.5)
+          : [await fileToCanvas(file, 1.5)]
+        for (const c of canvases) {
+          const rooms = await extractRooms(toDataUrl(c, 0.85).split(',')[1], 'image/jpeg')
+          if (Array.isArray(rooms)) mergeBtiRooms(rooms)
+        }
       }
     } catch (e) {
       setError(`Ошибка экспликации: ${e.message}`)
     } finally { setExLoading(false) }
-  }, [mergeBtiRooms])
+  }, [stagedFiles, mergeBtiRooms])
 
   // ── drag-and-drop зона ────────────────────────────────────────────────────
   const onDrop = useCallback(e => {
@@ -630,34 +635,68 @@ export default function BTIRecognizer({ onClose }) {
             )}
           </div>
 
-          {/* Кнопка добавить экспликацию */}
-          <div style={{ padding:14, borderTop:'1px solid #F0F0F5' }}>
-            {error && <div style={{ fontSize:11, color:'#DC2626', marginBottom:10, background:'#FFF1F2', border:'1px solid #FECDD3', borderRadius:7, padding:'7px 10px' }}>{error}</div>}
+          {/* Панель экспликации */}
+          <div style={{ padding:14, borderTop:'1px solid #F0F0F5', display:'flex', flexDirection:'column', gap:8 }}>
+            {error && <div style={{ fontSize:11, color:'#DC2626', background:'#FFF1F2', border:'1px solid #FECDD3', borderRadius:7, padding:'7px 10px' }}>{error}</div>}
+
+            {/* Список staged-файлов */}
+            {stagedFiles.length > 0 && (
+              <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                {stagedFiles.map((f, i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:6, background:'#F0F4FF', border:'1px solid #C7D2FE', borderRadius:7, padding:'5px 8px' }}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span style={{ flex:1, fontSize:11, color:'#3730A3', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+                    <button
+                      onClick={() => setStagedFiles(prev => prev.filter((_,j) => j !== i))}
+                      style={{ background:'none', border:'none', cursor:'pointer', color:'#6B7280', padding:0, display:'flex', lineHeight:1 }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Добавить файлы */}
             <label style={{
               display:'flex', alignItems:'center', justifyContent:'center', gap:8,
               background: exLoading ? '#F3F5FA' : 'linear-gradient(135deg,#F0F4FF,#F5F3FF)',
               border:'1.5px dashed #A5B4FC', borderRadius:10,
-              padding:'10px 0', cursor: exLoading ? 'default' : 'pointer',
+              padding:'9px 0', cursor: exLoading ? 'default' : 'pointer',
               fontSize:12, fontWeight:600, color:'#4338CA', fontFamily:'inherit',
             }}>
-              {exLoading ? (
-                <>
-                  <div style={{ display:'flex', gap:3 }}>
-                    {[0,1,2].map(i => <div key={i} style={{ width:5, height:5, borderRadius:'50%', background:'#6366F1', animation:`bimDot 1s ease-in-out ${i*0.15}s infinite` }}/>)}
-                  </div>
-                  Читаю экспликацию…
-                </>
-              ) : (
-                <>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                  Добавить экспликацию
-                </>
-              )}
-              <input ref={exInputRef} type="file" accept={ACCEPT} style={{ display:'none' }} disabled={exLoading}
-                onChange={e => { if (e.target.files[0]) processExplication(e.target.files[0]); e.target.value = '' }}/>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              {stagedFiles.length > 0 ? 'Добавить ещё' : 'Добавить экспликацию'}
+              <input ref={exInputRef} type="file" accept={ACCEPT} multiple style={{ display:'none' }} disabled={exLoading}
+                onChange={e => {
+                  const files = Array.from(e.target.files)
+                  if (files.length) setStagedFiles(prev => [...prev, ...files])
+                  e.target.value = ''
+                }}/>
             </label>
-            <div style={{ marginTop:8, fontSize:10, color:'#9CA3AF', textAlign:'center', lineHeight:1.5 }}>
-              После загрузки нажмите <svg style={{verticalAlign:'middle'}} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> у помещения<br/>и кликните внутри него на плане
+
+            {/* Кнопка запуска распознавания */}
+            {stagedFiles.length > 0 && !exLoading && (
+              <button
+                onClick={processAllExplications}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, background:'linear-gradient(135deg,#4F46E5,#7C3AED)', color:'#fff', border:'none', borderRadius:10, padding:'10px 0', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                Распознать {stagedFiles.length} {stagedFiles.length === 1 ? 'файл' : stagedFiles.length < 5 ? 'файла' : 'файлов'}
+              </button>
+            )}
+
+            {exLoading && (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, fontSize:12, color:'#6366F1', padding:'6px 0' }}>
+                <div style={{ display:'flex', gap:3 }}>
+                  {[0,1,2].map(i => <div key={i} style={{ width:5, height:5, borderRadius:'50%', background:'#6366F1', animation:`bimDot 1s ease-in-out ${i*0.15}s infinite` }}/>)}
+                </div>
+                Читаю экспликацию…
+              </div>
+            )}
+
+            <div style={{ fontSize:10, color:'#9CA3AF', textAlign:'center', lineHeight:1.5 }}>
+              После распознавания нажмите <svg style={{verticalAlign:'middle'}} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> у помещения<br/>и кликните внутри него на плане
             </div>
           </div>
         </aside>
