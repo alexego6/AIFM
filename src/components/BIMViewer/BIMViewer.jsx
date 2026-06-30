@@ -303,31 +303,6 @@ export default function BIMViewer() {
     }
   }, [])
 
-  // Switch between 3D and 2D modes
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    canvas.dataset.mode = viewMode
-
-    const controls = controlsRef.current
-    if (!controls) return
-
-    if (viewMode === '2d') {
-      controls.enabled = false
-      applyFloorClip(floorLevel)
-    } else {
-      controls.enabled = true
-      if (modelRef.current) {
-        modelRef.current.traverse(obj => {
-          if (obj.isMesh && obj.material) {
-            const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
-            mats.forEach(m => { m.clippingPlanes = [] })
-          }
-        })
-      }
-    }
-  }, [viewMode])
-
   const applyFloorClip = useCallback((level) => {
     if (!modelRef.current || storeys.length === 0) return
     const storey = storeys[level]
@@ -359,6 +334,31 @@ export default function BIMViewer() {
       orthoCamRef.current.updateProjectionMatrix()
     }
   }, [storeys])
+
+  // Switch between 3D and 2D modes
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.dataset.mode = viewMode
+
+    const controls = controlsRef.current
+    if (!controls) return
+
+    if (viewMode === '2d') {
+      controls.enabled = false
+      applyFloorClip(floorLevel)
+    } else {
+      controls.enabled = true
+      if (modelRef.current) {
+        modelRef.current.traverse(obj => {
+          if (obj.isMesh && obj.material) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+            mats.forEach(m => { m.clippingPlanes = [] })
+          }
+        })
+      }
+    }
+  }, [viewMode, applyFloorClip, floorLevel])
 
   useEffect(() => {
     if (viewMode === '2d') applyFloorClip(floorLevel)

@@ -53,8 +53,9 @@ export default function App() {
       setActiveSection('bim')
     } else if (activeSection === 'building' && BTI_MIME.test(file.type)) {
       setBtiPendingFile(file)
-    } else if (activeSection === 'tz-analysis' && (TZ_MIME.test(file.type) || /\.(docx|xlsx|xls|txt)$/i.test(file.name))) {
+    } else if (TZ_MIME.test(file.type) || /\.(docx|xlsx|xls|txt)$/i.test(file.name)) {
       setTzPendingFile(file)
+      setActiveSection('tz-analysis')
     }
   }, [setBimPendingFile, setBtiPendingFile, setTzPendingFile, setActiveSection, activeSection])
 
