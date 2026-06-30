@@ -68,7 +68,6 @@ function autocropCanvas(src) {
   const d = src.getContext('2d').getImageData(0, 0, W, H).data
   const luma = i => 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]
 
-  // строчные и столбцовые проекции
   const rowD = new Float32Array(H)
   for (let y = 0; y < H; y++) {
     let n = 0
@@ -82,7 +81,6 @@ function autocropCanvas(src) {
     colD[x] = n / H
   }
 
-  // сглаживание скользящим средним (окно = 2% размера)
   const smooth = (arr, win) => {
     const out = new Float32Array(arr.length)
     for (let i = 0; i < arr.length; i++) {
@@ -110,6 +108,75 @@ function autocropCanvas(src) {
   out.width = right-left; out.height = bot-top
   out.getContext('2d').drawImage(src, left, top, out.width, out.height, 0, 0, out.width, out.height)
   return out
+}
+
+// ── flood-fill: определение границ помещения ──────────────────────────────────
+// Возвращает { dataUrl, x, y, w, h } (0..1 от размеров srcCanvas) или null.
+function floodFillRoom(srcCanvas, clickX, clickY, hexColor) {
+  const W = srcCanvas.width, H = srcCanvas.height
+  const imgData = srcCanvas.getContext('2d').getImageData(0, 0, W, H).data
+  const luma = i => 0.299*imgData[i] + 0.587*imgData[i+1] + 0.114*imgData[i+2]
+  const pixIdx = (x, y) => (y * W + x) * 4
+
+  // Стартовый пиксель должен быть «светлым» (в помещении, не на стене)
+  if (luma(pixIdx(clickX, clickY)) < 160) return null
+
+  const visited = new Uint8Array(W * H)
+  const qx = new Int32Array(W * H)
+  const qy = new Int32Array(W * H)
+  let head = 0, tail = 0
+  let minX = clickX, maxX = clickX, minY = clickY, maxY = clickY
+
+  visited[clickY * W + clickX] = 1
+  qx[tail] = clickX; qy[tail] = clickY; tail++
+
+  // 8-связный обход — лучше огибает мелкие подписи и тонкие линии
+  const DX = [-1,-1,-1, 0, 0, 1, 1, 1]
+  const DY = [-1, 0, 1,-1, 1,-1, 0, 1]
+
+  while (head < tail) {
+    const cx = qx[head], cy = qy[head]; head++
+    for (let d = 0; d < 8; d++) {
+      const nx = cx + DX[d], ny = cy + DY[d]
+      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+      const vi = ny * W + nx
+      if (visited[vi]) continue
+      if (luma(pixIdx(nx, ny)) < 160) continue
+      visited[vi] = 1
+      qx[tail] = nx; qy[tail] = ny; tail++
+      if (nx < minX) minX = nx; if (nx > maxX) maxX = nx
+      if (ny < minY) minY = ny; if (ny > maxY) maxY = ny
+    }
+  }
+
+  const filled = tail
+  const total  = W * H
+  if (filled < total * 0.0008) return null  // слишком маленькая область
+  if (filled > total * 0.45)   return null  // заливка «вытекла» наружу
+
+  const bw = maxX - minX + 1, bh = maxY - minY + 1
+  const r = parseInt(hexColor.slice(1,3), 16)
+  const g = parseInt(hexColor.slice(3,5), 16)
+  const b = parseInt(hexColor.slice(5,7), 16)
+
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = bw; maskCanvas.height = bh
+  const mCtx = maskCanvas.getContext('2d')
+  const outData = mCtx.createImageData(bw, bh)
+  for (let i = 0; i < filled; i++) {
+    const j = ((qy[i] - minY) * bw + (qx[i] - minX)) * 4
+    outData.data[j]   = r
+    outData.data[j+1] = g
+    outData.data[j+2] = b
+    outData.data[j+3] = 90   // ~35% непрозрачность
+  }
+  mCtx.putImageData(outData, 0, 0)
+
+  return {
+    dataUrl: maskCanvas.toDataURL('image/png'),
+    x: minX / W, y: minY / H,
+    w: bw / W,   h: bh / H,
+  }
 }
 
 const toDataUrl = (canvas, q=0.88) => canvas.toDataURL('image/jpeg', q)
@@ -146,7 +213,6 @@ function MarkerPin({ number, type, x, y, selected }) {
           maxWidth:20, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
         }}>{number}</span>
       </div>
-      {/* тень-точка под пином */}
       <div style={{ width:6, height:4, background:'rgba(0,0,0,0.18)', borderRadius:'50%', margin:'-2px auto 0', filter:'blur(2px)' }}/>
     </div>
   )
@@ -155,22 +221,38 @@ function MarkerPin({ number, type, x, y, selected }) {
 // ── главный компонент ─────────────────────────────────────────────────────────
 export default function BTIRecognizer({ onClose }) {
   const {
-    btiPlanImage, btiRooms, btiMarkers,
+    btiPlanImage, btiRooms, btiMarkers, btiRoomMasks,
     setBtiPlanImage, setBtiRooms, mergeBtiRooms,
-    setBtiMarker, removeBtiMarker, clearBti,
+    setBtiMarker, removeBtiMarker,
+    setBtiRoomMask, removeBtiRoomMask,
+    clearBti,
   } = useAppStore()
 
-  const [isDrag,   setIsDrag]   = useState(false)
-  const [loading,  setLoading]  = useState(false)
-  const [loadMsg,  setLoadMsg]  = useState('')
-  const [error,    setError]    = useState(null)
-  const [pendingRoom, setPendingRoom]   = useState(null)   // номер комнаты ожидающей маркер
-  const [selectedNum, setSelectedNum]  = useState(null)   // выбранный маркер на плане
-  const [exLoading,   setExLoading]    = useState(false)
+  const [isDrag,      setIsDrag]      = useState(false)
+  const [loading,     setLoading]     = useState(false)
+  const [loadMsg,     setLoadMsg]     = useState('')
+  const [error,       setError]       = useState(null)
+  const [pendingRoom, setPendingRoom] = useState(null)
+  const [selectedNum, setSelectedNum] = useState(null)
+  const [exLoading,   setExLoading]   = useState(false)
 
-  const planImgRef     = useRef(null)
-  const exInputRef     = useRef(null)
-  const draggingRef    = useRef(null)   // { number } во время drag
+  const planImgRef   = useRef(null)
+  const exInputRef   = useRef(null)
+  const draggingRef  = useRef(null)
+  const planCanvasRef = useRef(null)   // ссылка на кроп-канвас для flood-fill
+
+  // Восстанавливаем канвас из сохранённого dataURL при маунте
+  useEffect(() => {
+    if (!btiPlanImage || planCanvasRef.current) return
+    const img = new Image()
+    img.onload = () => {
+      const c = document.createElement('canvas')
+      c.width = img.naturalWidth; c.height = img.naturalHeight
+      c.getContext('2d').drawImage(img, 0, 0)
+      planCanvasRef.current = c
+    }
+    img.src = btiPlanImage
+  }, [btiPlanImage])
 
   // ── drag маркеров ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -197,6 +279,7 @@ export default function BTIRecognizer({ onClose }) {
 
       setLoadMsg('Обрезаю поля…')
       const cropped = autocropCanvas(canvas)
+      planCanvasRef.current = cropped   // сохраняем канвас для flood-fill
       setBtiPlanImage(toDataUrl(cropped, 0.92))
       setBtiRooms([])
 
@@ -236,18 +319,30 @@ export default function BTIRecognizer({ onClose }) {
   const onDragOver  = useCallback(e => { e.preventDefault(); setIsDrag(true) }, [])
   const onDragLeave = useCallback(e => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDrag(false) }, [])
 
-  // ── клик по плану → размещение маркера ────────────────────────────────────
+  // ── клик по плану → маркер + flood-fill маска ─────────────────────────────
   const handlePlanClick = useCallback(e => {
     if (!pendingRoom || !planImgRef.current) return
-    // если кликнули на маркер — не ставим новый
     if (e.target.closest('[data-marker-num]')) return
+
     const rect = planImgRef.current.getBoundingClientRect()
-    setBtiMarker(pendingRoom, {
-      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
-    })
+    const nx = Math.max(0, Math.min(1, (e.clientX - rect.left)  / rect.width))
+    const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+
+    setBtiMarker(pendingRoom, { x: nx, y: ny })
+
+    if (planCanvasRef.current) {
+      const cv  = planCanvasRef.current
+      const px  = Math.round(nx * cv.width)
+      const py  = Math.round(ny * cv.height)
+      const room  = btiRooms.find(r => r.number === pendingRoom)
+      const color = TYPE_COLOR[room?.type || 'other']
+      const mask  = floodFillRoom(cv, px, py, color)
+      if (mask) setBtiRoomMask(pendingRoom, mask)
+      else      removeBtiRoomMask(pendingRoom)
+    }
+
     setPendingRoom(null)
-  }, [pendingRoom, setBtiMarker])
+  }, [pendingRoom, setBtiMarker, btiRooms, setBtiRoomMask, removeBtiRoomMask])
 
   // ── mousedown на маркере → начало drag ────────────────────────────────────
   const handleContainerMouseDown = useCallback(e => {
@@ -285,7 +380,6 @@ export default function BTIRecognizer({ onClose }) {
         ) : (
           <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:40 }}>
             <div style={{ display:'flex', gap:48, alignItems:'center', maxWidth:720, width:'100%' }}>
-              {/* иллюстрация */}
               <div style={{ flex:'none', display:'flex', flexDirection:'column', alignItems:'center', gap:16 }}>
                 <svg width="130" height="130" viewBox="0 0 130 130" fill="none">
                   <rect x="10" y="15" width="110" height="95" rx="5" fill="#F0F4FF" stroke="#C7D2FE" strokeWidth="1.5"/>
@@ -335,7 +429,6 @@ export default function BTIRecognizer({ onClose }) {
       style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', background:'#F3F5FA', position:'relative' }}
       onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
     >
-      {/* drag overlay при перетаскивании нового плана */}
       {isDrag && (
         <div style={{ position:'absolute', inset:0, zIndex:50, background:'rgba(238,242,255,0.9)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
           <div style={{ position:'absolute', inset:12, border:'2.5px dashed #6366F1', borderRadius:18 }}/>
@@ -354,10 +447,17 @@ export default function BTIRecognizer({ onClose }) {
           План этажа · {btiRooms.length > 0 ? `${btiRooms.length} помещений` : 'загрузка данных…'}
         </span>
 
+        {/* Подсказка: сколько помещений уже отмечено */}
+        {btiRooms.length > 0 && (
+          <span style={{ fontSize:11, color:'#9CA3AF', background:'#F3F5FA', border:'1px solid #E8ECF5', borderRadius:6, padding:'3px 8px' }}>
+            {Object.keys(btiRoomMasks).length} / {btiRooms.length} нанесено на план
+          </span>
+        )}
+
         <label style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6, background:'none', border:'1px solid #E8ECF5', borderRadius:8, padding:'6px 12px', fontSize:12, color:'#6B7280', cursor:'pointer', fontFamily:'inherit' }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Загрузить другой
-          <input type="file" accept={ACCEPT} style={{ display:'none' }} onChange={e => { if (e.target.files[0]) { clearBti(); processFile(e.target.files[0]) }}}/>
+          <input type="file" accept={ACCEPT} style={{ display:'none' }} onChange={e => { if (e.target.files[0]) { clearBti(); planCanvasRef.current = null; processFile(e.target.files[0]) }}}/>
         </label>
       </div>
 
@@ -366,7 +466,7 @@ export default function BTIRecognizer({ onClose }) {
         <div style={{ flex:'none', background:'linear-gradient(90deg,#EEF2FF,#F5F3FF)', borderBottom:'1px solid #C7D2FE', padding:'9px 18px', display:'flex', alignItems:'center', gap:12 }}>
           <div style={{ width:8, height:8, borderRadius:'50%', background:'#6366F1', animation:'bimDot 1.2s ease-in-out infinite', flex:'none' }}/>
           <span style={{ fontSize:13, color:'#3730A3', fontWeight:500 }}>
-            Нажмите на план для размещения маркера помещения <strong>№ {pendingRoom}</strong>
+            Нажмите внутри помещения <strong>№ {pendingRoom}</strong> на плане — контур будет закрашен автоматически
           </span>
           <button onClick={() => setPendingRoom(null)} style={{ marginLeft:'auto', fontSize:12, color:'#6B7280', background:'none', border:'1px solid #E8ECF5', borderRadius:7, padding:'4px 12px', cursor:'pointer', fontFamily:'inherit' }}>
             Отмена
@@ -377,7 +477,7 @@ export default function BTIRecognizer({ onClose }) {
       {/* Основной контент */}
       <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
 
-        {/* Левая область: подложка плана */}
+        {/* Левая область: подложка плана с масками и маркерами */}
         <div
           style={{ flex:1, overflow:'auto', padding:20, cursor: pendingRoom ? 'crosshair' : 'default' }}
           onClick={handlePlanClick}
@@ -390,7 +490,28 @@ export default function BTIRecognizer({ onClose }) {
               draggable={false}
               style={{ width:'100%', display:'block', borderRadius:14, border:'1px solid #E0E5F7', boxShadow:'0 2px 12px rgba(29,78,216,0.08)', userSelect:'none' }}
             />
-            {/* маркеры */}
+
+            {/* Маски помещений (flood-fill) */}
+            {Object.entries(btiRoomMasks).map(([num, mask]) => (
+              <img
+                key={`mask-${num}`}
+                src={mask.dataUrl}
+                draggable={false}
+                style={{
+                  position:'absolute',
+                  left:`${mask.x * 100}%`,
+                  top:`${mask.y * 100}%`,
+                  width:`${mask.w * 100}%`,
+                  height:`${mask.h * 100}%`,
+                  pointerEvents:'none',
+                  opacity: selectedNum === num ? 0.75 : 0.45,
+                  transition:'opacity .15s',
+                  borderRadius:3,
+                }}
+              />
+            ))}
+
+            {/* Маркер-пины поверх масок */}
             {Object.entries(btiMarkers).map(([num, pos]) => {
               const room = btiRooms.find(r => r.number === num)
               return (
@@ -409,7 +530,6 @@ export default function BTIRecognizer({ onClose }) {
         {/* Правая панель: список помещений */}
         <aside style={{ width:300, flex:'none', background:'#FFFFFF', borderLeft:'1px solid #E8ECF5', display:'flex', flexDirection:'column', overflow:'hidden' }}>
 
-          {/* Заголовок панели */}
           <div style={{ padding:'14px 16px 10px', borderBottom:'1px solid #F0F0F5' }}>
             <div style={{ fontSize:10, color:'#9CA3AF', textTransform:'uppercase', letterSpacing:'.6px', fontWeight:600, marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>
               ПОМЕЩЕНИЯ {btiRooms.length > 0 && `(${btiRooms.length})`}
@@ -424,7 +544,6 @@ export default function BTIRecognizer({ onClose }) {
             )}
           </div>
 
-          {/* Список */}
           <div style={{ flex:1, overflow:'auto' }}>
             {btiRooms.length === 0 && !loading ? (
               <div style={{ padding:20, textAlign:'center', color:'#9CA3AF', fontSize:12, lineHeight:1.7 }}>
@@ -432,10 +551,11 @@ export default function BTIRecognizer({ onClose }) {
               </div>
             ) : (
               btiRooms.map(room => {
-                const hasMarker = !!btiMarkers[room.number]
-                const isPending = pendingRoom === room.number
+                const hasMask    = !!btiRoomMasks[room.number]
+                const hasMarker  = !!btiMarkers[room.number]
+                const isPending  = pendingRoom === room.number
                 const isSelected = selectedNum === room.number
-                const color = TYPE_COLOR[room.type] || TYPE_COLOR.other
+                const color      = TYPE_COLOR[room.type] || TYPE_COLOR.other
 
                 return (
                   <div
@@ -448,13 +568,15 @@ export default function BTIRecognizer({ onClose }) {
                       cursor:'pointer',
                       transition:'background .1s',
                     }}
-                    onClick={() => {
-                      if (isSelected && hasMarker) return   // уже выбран
-                      setSelectedNum(room.number)
-                    }}
+                    onClick={() => setSelectedNum(room.number)}
                   >
-                    {/* цветная точка типа */}
-                    <div style={{ width:10, height:10, borderRadius:'50%', background:color, flex:'none', opacity: hasMarker ? 1 : 0.35 }}/>
+                    {/* цветная точка: залита если маска уже есть */}
+                    <div style={{
+                      width:10, height:10, borderRadius:'50%',
+                      background: hasMask ? color : 'transparent',
+                      border: hasMask ? 'none' : `2px solid ${color}`,
+                      flex:'none', transition:'all .15s',
+                    }}/>
 
                     {/* номер */}
                     <span style={{ fontSize:11, fontWeight:700, color:'#6B7280', fontFamily:"'JetBrains Mono',monospace", minWidth:24 }}>
@@ -479,19 +601,24 @@ export default function BTIRecognizer({ onClose }) {
                         setPendingRoom(room.number)
                         setSelectedNum(room.number)
                       }}
-                      title={hasMarker ? 'Переместить маркер' : 'Поставить маркер'}
+                      title={hasMarker ? 'Переразметить помещение' : 'Отметить на плане'}
                       style={{ width:28, height:28, borderRadius:7, border:`1px solid ${isPending ? '#6366F1' : '#E8ECF5'}`, background: isPending ? '#EEF2FF' : '#F8F9FD', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flex:'none', transition:'all .1s' }}
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill={hasMarker ? color : 'none'} stroke={isPending ? '#6366F1' : hasMarker ? color : '#9CA3AF'} strokeWidth="2">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill={hasMask ? color : 'none'} stroke={isPending ? '#6366F1' : hasMask ? color : '#9CA3AF'} strokeWidth="2">
                         <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
                       </svg>
                     </button>
 
-                    {/* кнопка удаления маркера */}
-                    {isSelected && hasMarker && (
+                    {/* кнопка удаления маркера + маски */}
+                    {isSelected && (hasMarker || hasMask) && (
                       <button
-                        onClick={e => { e.stopPropagation(); removeBtiMarker(room.number); setSelectedNum(null) }}
-                        title="Удалить маркер"
+                        onClick={e => {
+                          e.stopPropagation()
+                          removeBtiMarker(room.number)
+                          removeBtiRoomMask(room.number)
+                          setSelectedNum(null)
+                        }}
+                        title="Удалить с плана"
                         style={{ width:24, height:24, borderRadius:6, border:'1px solid #FECDD3', background:'#FFF1F2', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flex:'none', color:'#DC2626' }}
                       >
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -530,7 +657,7 @@ export default function BTIRecognizer({ onClose }) {
                 onChange={e => { if (e.target.files[0]) processExplication(e.target.files[0]); e.target.value = '' }}/>
             </label>
             <div style={{ marginTop:8, fontSize:10, color:'#9CA3AF', textAlign:'center', lineHeight:1.5 }}>
-              PDF или фото таблицы экспликации<br/>обновит названия и площади помещений
+              После загрузки нажмите <svg style={{verticalAlign:'middle'}} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> у помещения<br/>и кликните внутри него на плане
             </div>
           </div>
         </aside>
