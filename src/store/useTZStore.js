@@ -64,7 +64,10 @@ export const useTZStore = create((set, get) => ({
   // buildings[i].resource — Этап 5
 
   // ── действия ─────────────────────────────────────────────────────────────
-  setFile: (name, size) => set({ fileName: name, fileSize: size }),
+  setFile: async (name, size) => {
+    set({ fileName: name, fileSize: size })
+    await idb.set('meta', { fileName: name, fileSize: size })
+  },
 
   setChunks: async (chunks) => {
     set({ chunks })
@@ -101,13 +104,15 @@ export const useTZStore = create((set, get) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings] = await Promise.all([
+    const [chunks, buildings, meta] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
+      idb.get('meta'),
     ])
     const patch = {}
-    if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = Math.max(get().stage, 0) }
-    if (buildings?.length) { patch.buildings = buildings; patch.stage = Math.max(get().stage, 1) }
+    if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
+    if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = 0; patch.stageStatus = 'done' }
+    if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'checkpoint' }
     if (Object.keys(patch).length) set(patch)
   },
 }))

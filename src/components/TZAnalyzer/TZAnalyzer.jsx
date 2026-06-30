@@ -166,10 +166,10 @@ export default function TZAnalyzer() {
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  if (!fileName && stage === 0 && stageStatus !== 'running') {
+  if (!chunks.length && stageStatus !== 'running') {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#F8FAFC', overflow: 'hidden' }}>
-        {stageStatus === 'error' && parseError && (
+        {parseError && (
           <div style={{ margin: '16px 24px 0', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#B91C1C' }}>
             {parseError}
           </div>
