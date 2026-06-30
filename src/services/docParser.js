@@ -30,7 +30,7 @@ export async function parseFile(file) {
     const result = await mammoth.extractRawText({ arrayBuffer: ab })
     text = result.value
     result.messages
-      .filter(m => m.type === 'warning')
+      .filter(m => m.type === 'warning' && !m.message.includes('image') && !m.message.includes('element was ignored'))
       .forEach(m => warnings.push(m.message))
 
   } else if (ext === 'pdf') {
