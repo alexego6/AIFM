@@ -115,6 +115,7 @@ export default function TZAnalyzer() {
   } = useTZStore()
 
   const [parseError, setParseError] = useState(null)
+  const [stage1Progress, setStage1Progress] = useState(null) // { pct, batch, total }
 
   useEffect(() => { loadFromDB() }, [])
 
@@ -146,11 +147,16 @@ export default function TZAnalyzer() {
   // ── Этап 1: определение зданий ──────────────────────────────────────────────
   async function handleStage1() {
     setStage(1, 'running')
+    setStage1Progress({ pct: 0, batch: 0, total: 0 })
     try {
-      const result = await runStage1(chunks)
+      const result = await runStage1(chunks, (pct, batch, total) => {
+        setStage1Progress({ pct, batch, total })
+      })
       await setBuildings(result)
-      setStage(1, 'checkpoint')  // ждём подтверждения пользователя
+      setStage1Progress(null)
+      setStage(1, 'checkpoint')
     } catch (err) {
+      setStage1Progress(null)
       setStage(1, 'error', err.message)
     }
   }
@@ -225,14 +231,30 @@ export default function TZAnalyzer() {
 
         {/* Этап 1 — выполняется */}
         {stage === 1 && stageStatus === 'running' && (
-          <div style={{ background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 14, padding: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" strokeWidth="2.2" style={{ animation: 'spin 1s linear infinite', flex: 'none' }}>
-              <path d="M21 12a9 9 0 1 1-6-8.5"/>
-            </svg>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#1E40AF' }}>Анализирую ТЗ…</div>
-              <div style={{ fontSize: 12, color: '#3730A3', marginTop: 2 }}>Извлекаю здания и объекты из документа</div>
+          <div style={{ background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 14, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: stage1Progress?.total > 1 ? 12 : 0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" strokeWidth="2.2" style={{ animation: 'spin 1s linear infinite', flex: 'none' }}>
+                <path d="M21 12a9 9 0 1 1-6-8.5"/>
+              </svg>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#1E40AF' }}>Анализирую ТЗ…</div>
+                <div style={{ fontSize: 12, color: '#3730A3', marginTop: 2 }}>
+                  {stage1Progress?.total > 1
+                    ? `Фрагмент ${stage1Progress.batch} из ${stage1Progress.total}`
+                    : 'Извлекаю здания и объекты из документа'}
+                </div>
+              </div>
             </div>
+            {stage1Progress?.total > 1 && (
+              <div style={{ background: '#C7D2FE', borderRadius: 4, height: 4, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 4,
+                  background: 'linear-gradient(90deg,#1D4ED8,#7C3AED)',
+                  width: `${stage1Progress.pct}%`,
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+            )}
           </div>
         )}
 

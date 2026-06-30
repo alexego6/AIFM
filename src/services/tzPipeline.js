@@ -25,71 +25,94 @@ async function callClaude(prompt, maxTokens = 4096) {
 }
 
 // ── Stage 1: определение зданий/объектов ─────────────────────────────────────
-const BUILDINGS_SCHEMA = `[
-  {
-    "id": "b1",
-    "name": "полное название здания/объекта",
-    "address": "адрес или null",
-    "floors": 5,
-    "area_m2": 12500.0,
-    "year_built": 2003,
-    "purpose": "офисное здание"
-  }
-]`
+const BUILDINGS_SCHEMA = `[{"id":"b1","name":"...","address":"...","floors":4,"area_m2":8958.5,"year_built":2015,"purpose":"административно-офисное здание"}]`
 
-const STAGE1_PROMPT = (text) => `Ты — эксперт по технической эксплуатации объектов (Facility Management).
+const STAGE1_PROMPT = (text, knownNames = []) => {
+  const exclude = knownNames.length
+    ? `\nУЖЕ НАЙДЕННЫЕ объекты (не дублируй): ${knownNames.join(' | ')}\n`
+    : ''
+  return `Ты — эксперт по технической эксплуатации объектов (Facility Management).
+Тебе предоставлен фрагмент технического задания (ТЗ) на обслуживание объектов недвижимости.
+${exclude}
+ЗАДАЧА: найди ВСЕ здания/объекты/корпуса, упомянутые в этом фрагменте. Для каждого верни:
+- id: b1, b2, b3 … (продолжи нумерацию относительно уже найденных: следующий = b${knownNames.length + 1})
+- name: официальное наименование (корпус, здание, объект)
+- address: адрес или null
+- floors: число этажей (целое) или null
+- area_m2: площадь кв.м (число) или null
+- year_built: год постройки или null
+- purpose: назначение (короткая фраза) или null
 
-Тебе предоставлен текст технического задания (ТЗ) на техническое обслуживание и эксплуатацию объектов.
+ПРАВИЛА:
+- Только реальные объекты из текста, не выдумывай
+- Не включай уже найденные (см. выше)
+- Если в этом фрагменте новых объектов нет — верни []
+- Верни ТОЛЬКО JSON-массив без markdown
 
-ЗАДАЧА: найди ВСЕ здания и объекты, упомянутые в ТЗ. Определи для каждого:
-- id: уникальный ключ b1, b2, b3 ...
-- name: официальное наименование объекта
-- address: адрес (если есть в тексте), иначе null
-- floors: число этажей (целое), null если не указано
-- area_m2: общая площадь кв.м (число), null если не указана
-- year_built: год постройки/ввода в эксплуатацию, null если не указан
-- purpose: функциональное назначение (короткая фраза: "административный корпус", "производственный цех", "склад")
+Пример: ${BUILDINGS_SCHEMA}
 
-ВАЖНО:
-- Включай только реальные объекты из текста, не выдумывай
-- Если в ТЗ один объект — верни массив из одного элемента
-- Верни ТОЛЬКО JSON-массив без markdown и пояснений
-
-Пример ответа:
-${BUILDINGS_SCHEMA}
-
-ТЕКСТ ТЗ:
+ФРАГМЕНТ ТЗ:
 ${text}`
+}
+
+// Нормализует имя для дедупликации
+function normName(name) {
+  return name.toLowerCase().replace(/[«»""''№\s]+/g, ' ').trim()
+}
 
 /**
- * Этап 1: определяет здания из чанков документа.
- * chunks — массив строк из chunkByHeadings()
+ * Этап 1: сканирует ВСЕ чанки батчами по ~100к символов.
+ * onProgress(pct, batchIdx, totalBatches) — необязательный коллбэк прогресса.
  * Возвращает Building[]
  */
-export async function runStage1(chunks) {
-  // Берём первые чанки, покрывающие общее описание объекта (обычно это начало ТЗ)
-  // Лимит — 40 000 символов чтобы не превысить контекст
-  const MAX_TOTAL = 40_000
-  let total = 0
-  const selected = []
+export async function runStage1(chunks, onProgress) {
+  const BATCH_SIZE = 100_000   // ~25k токенов — хорошо вписывается в контекст
+
+  // Собираем батчи
+  const batches = []
+  let cur = ''
   for (const c of chunks) {
-    if (total + c.length > MAX_TOTAL) break
-    selected.push(c)
-    total += c.length
+    if (cur.length + c.length > BATCH_SIZE && cur.length > 0) {
+      batches.push(cur)
+      cur = c
+    } else {
+      cur += (cur ? '\n\n---\n\n' : '') + c
+    }
   }
-  const text = selected.join('\n\n---\n\n')
+  if (cur) batches.push(cur)
 
-  const raw = await callClaude(STAGE1_PROMPT(text), 2048)
-  const buildings = JSON.parse(raw)
+  const allBuildings = []
+  const seenNames = new Set()
 
-  // Гарантируем уникальные id
-  return buildings.map((b, i) => ({
-    id: b.id ?? `b${i + 1}`,
+  for (let i = 0; i < batches.length; i++) {
+    onProgress?.(Math.round((i / batches.length) * 100), i + 1, batches.length)
+
+    const knownNames = allBuildings.map(b => b.name)
+    const raw = await callClaude(STAGE1_PROMPT(batches[i], knownNames), 2048)
+
+    let parsed = []
+    try { parsed = JSON.parse(raw) } catch { continue }
+
+    for (const b of parsed) {
+      if (!b.name) continue
+      const key = normName(b.name)
+      if (!seenNames.has(key)) {
+        seenNames.add(key)
+        allBuildings.push(b)
+      }
+    }
+  }
+
+  onProgress?.(100, batches.length, batches.length)
+
+  // Переназначаем id по порядку
+  return allBuildings.map((b, i) => ({
+    id: `b${i + 1}`,
     name: b.name ?? 'Объект без названия',
     address: b.address ?? null,
-    floors: b.floors ?? null,
-    area_m2: b.area_m2 ?? null,
-    year_built: b.year_built ?? null,
+    floors: typeof b.floors === 'number' ? b.floors : null,
+    area_m2: typeof b.area_m2 === 'number' ? b.area_m2 : null,
+    year_built: typeof b.year_built === 'number' ? b.year_built : null,
     purpose: b.purpose ?? null,
   }))
 }
