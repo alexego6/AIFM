@@ -20,8 +20,9 @@ async function callClaude(prompt, maxTokens = 4096) {
   })
   if (!res.ok) { const e = new Error(`API ${res.status}`); e.code = 'API_ERROR'; throw e }
   const data = await res.json()
-  const text = data.content[0].text.trim()
-  return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+  const text = data.content?.[0]?.text
+  if (!text) { const e = new Error('Empty API response'); e.code = 'EMPTY_RESPONSE'; throw e }
+  return text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
 }
 
 // ── Stage 1: определение зданий/объектов ─────────────────────────────────────
@@ -176,6 +177,8 @@ export async function runStage1(chunks, onProgress) {
     area_m2: typeof b.area_m2 === 'number' ? b.area_m2 : null,
     year_built: typeof b.year_built === 'number' ? b.year_built : null,
     purpose: b.purpose ?? null,
-    sub_buildings: Array.isArray(b.sub_buildings) ? b.sub_buildings.filter(Boolean) : [],
+    sub_buildings: Array.isArray(b.sub_buildings)
+      ? b.sub_buildings.filter(s => typeof s === 'string' && s.trim())
+      : [],
   }))
 }

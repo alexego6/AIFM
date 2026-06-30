@@ -161,6 +161,23 @@ describe('runStage1', () => {
     expect(result[0].sub_buildings).toEqual([]) // null → []
   })
 
+  it('handles empty chunks array without API calls', async () => {
+    const result = await runStage1([])
+    expect(result).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('handles empty API response (EMPTY_RESPONSE code) gracefully', async () => {
+    // API returns response with empty content array
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ content: [] }),
+    })
+    // The batch extract throws EMPTY_RESPONSE, is caught silently; no consolidation
+    const result = await runStage1([SMALL_CHUNK])
+    expect(result).toEqual([])
+  })
+
   it('reassigns ids sequentially b1, b2, b3…', async () => {
     mockFetch
       .mockResolvedValueOnce(makeClaudeResponse(CONSOLIDATE_RESULT))
@@ -172,7 +189,7 @@ describe('runStage1', () => {
     })
   })
 
-  it('filters empty strings from sub_buildings', async () => {
+  it('filters empty and whitespace-only strings from sub_buildings', async () => {
     const rawWithEmptySubs = JSON.stringify([{
       id: 'b1',
       name: 'Комплекс',
@@ -189,8 +206,9 @@ describe('runStage1', () => {
       .mockResolvedValueOnce(makeClaudeResponse(rawWithEmptySubs))
 
     const result = await runStage1([SMALL_CHUNK])
-    // filter(Boolean) removes '', null — but not '   ' (truthy)
+    expect(result[0].sub_buildings).toEqual(['Корпус А', 'Корпус Б'])
     expect(result[0].sub_buildings).not.toContain('')
     expect(result[0].sub_buildings).not.toContain(null)
+    expect(result[0].sub_buildings).not.toContain('   ')
   })
 })
