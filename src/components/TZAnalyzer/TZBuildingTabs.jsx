@@ -61,13 +61,18 @@ export default function TZBuildingTabs({ buildings }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* Вкладки */}
       {buildings.length > 1 && (
-        <div style={{ display: 'flex', gap: 4, paddingBottom: 0, borderBottom: '1px solid #E2E8F0', marginBottom: 16 }}>
+        <div className="tz-tabs" style={{
+          display: 'flex', gap: 0,
+          borderBottom: '1px solid #E2E8F0', marginBottom: 16,
+          overflowX: 'auto', scrollbarWidth: 'none',
+        }}>
+          <style>{`.tz-tabs::-webkit-scrollbar{display:none}`}</style>
           {buildings.map((b, i) => (
             <button
               key={b.id}
               onClick={() => setActive(i)}
               style={{
-                padding: '8px 16px',
+                padding: '8px 14px', flexShrink: 0,
                 fontSize: 13, fontWeight: active === i ? 600 : 400,
                 color: active === i ? '#1D4ED8' : '#64748B',
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -77,7 +82,7 @@ export default function TZBuildingTabs({ buildings }) {
                 whiteSpace: 'nowrap',
               }}
             >
-              {b.name.length > 28 ? b.name.slice(0, 26) + '…' : b.name}
+              {b.name.length > 22 ? b.name.slice(0, 20) + '…' : b.name}
             </button>
           ))}
         </div>
