@@ -43,9 +43,25 @@ function BuildingCard({ building }) {
         </div>
       )}
 
-      {fields.length === 0 && (
+      {fields.length === 0 && !building.sub_buildings?.length && (
         <div style={{ fontSize: 12, color: '#94A3B8', fontStyle: 'italic' }}>
           Подробные данные в ТЗ не указаны
+        </div>
+      )}
+
+      {building.sub_buildings?.length > 0 && (
+        <div style={{ marginTop: fields.length ? 14 : 0 }}>
+          <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>
+            Составные объекты ({building.sub_buildings.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {building.sub_buildings.map((s, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#374151' }}>
+                <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#CBD5E1', flex: 'none' }} />
+                {s}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
