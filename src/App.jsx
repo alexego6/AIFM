@@ -20,8 +20,10 @@ const SECTION_LABELS = {
   'dashboard':    'Дашборд',
 }
 
+const BTI_MIME = /^(application\/pdf|image\/)/
+
 export default function App() {
-  const { activeSection, setActiveSection, setBimPendingFile } = useAppStore()
+  const { activeSection, setActiveSection, setBimPendingFile, setBtiPendingFile } = useAppStore()
   const [globalDrag, setGlobalDrag] = useState(false)
 
   const onGlobalDragOver = useCallback((e) => {
@@ -40,11 +42,13 @@ export default function App() {
     setGlobalDrag(false)
     const file = e.dataTransfer.files[0]
     if (!file) return
-    if (file.name.endsWith('.ifc')) {
+    if (file.name.toLowerCase().endsWith('.ifc')) {
       setBimPendingFile(file)
       setActiveSection('bim')
+    } else if (activeSection === 'building' && BTI_MIME.test(file.type)) {
+      setBtiPendingFile(file)
     }
-  }, [setBimPendingFile, setActiveSection])
+  }, [setBimPendingFile, setBtiPendingFile, setActiveSection, activeSection])
 
   const renderContent = () => {
     switch (activeSection) {
@@ -65,7 +69,7 @@ export default function App() {
       onDragLeave={onGlobalDragLeave}
       onDrop={onGlobalDrop}
     >
-      {/* Глобальный дроп-оверлей */}
+      {/* Глобальный дроп-оверлей — контекст зависит от раздела */}
       {globalDrag && (
         <div style={{
           position:'absolute', inset:0, zIndex:1000,
@@ -80,15 +84,25 @@ export default function App() {
             borderRadius:22,
             animation:'bimDashAnim 0.7s ease-in-out infinite',
           }}/>
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, zIndex:1 }}>
-            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="1.4">
-              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-              <path d="M2 17l10 5 10-5"/>
-              <path d="M2 12l10 5 10-5"/>
-            </svg>
-            <div style={{ fontSize:24, fontWeight:700, color:'#4338CA' }}>Отпустите IFC-файл</div>
-            <div style={{ fontSize:14, color:'#6366F1', opacity:0.85 }}>Модель откроется в BIM-просмотрщике</div>
-          </div>
+          {activeSection === 'building' ? (
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, zIndex:1 }}>
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="1.4">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+              </svg>
+              <div style={{ fontSize:24, fontWeight:700, color:'#4338CA' }}>Отпустите план БТИ</div>
+              <div style={{ fontSize:14, color:'#6366F1', opacity:0.85 }}>PDF или фото поэтажного плана</div>
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, zIndex:1 }}>
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="1.4">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                <path d="M2 17l10 5 10-5"/>
+                <path d="M2 12l10 5 10-5"/>
+              </svg>
+              <div style={{ fontSize:24, fontWeight:700, color:'#4338CA' }}>Отпустите IFC-файл</div>
+              <div style={{ fontSize:14, color:'#6366F1', opacity:0.85 }}>Модель откроется в BIM-просмотрщике</div>
+            </div>
+          )}
         </div>
       )}
 

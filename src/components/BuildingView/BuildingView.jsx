@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { EQUIPMENT, SYSTEMS, FLOORS } from '../../data/building'
 import { useAppStore } from '../../store/useAppStore'
 import BTIRecognizer from '../BTIRecognizer/BTIRecognizer'
@@ -238,8 +238,14 @@ function IsometricBuilding({ onFloorClick, hoveredFloor }) {
 export default function BuildingView() {
   const [selectedFloor, setSelectedFloor] = useState(null)
   const [hoveredFloor, setHoveredFloor]   = useState(null)
-  const [showBTI, setShowBTI]             = useState(false)
-  const { btiPlanImage } = useAppStore()
+  // Начинаем в режиме плана БТИ; «К зданию» переключает обратно на изометрию
+  const [showBTI, setShowBTI]             = useState(true)
+  const { btiPlanImage, btiPendingFile } = useAppStore()
+
+  // Если пришёл файл через глобальный дроп — открыть BTI
+  useEffect(() => {
+    if (btiPendingFile) setShowBTI(true)
+  }, [btiPendingFile])
 
   const floorStats = useMemo(() =>
     [3,2,1].map(floorId => {

@@ -43,7 +43,9 @@ export const useAppStore = create((set) => ({
   bimFileName: null,
   bimSelectedElement: null,
   bimPendingFile: null,          // файл, дропнутый из App-уровня
+  btiPendingFile: null,          // файл плана БТИ, дропнутый из App-уровня
   setBimLoaded: (loaded, fileName) => set({ bimLoaded: loaded, bimFileName: fileName }),
   setBimSelectedElement: (el) => set({ bimSelectedElement: el }),
   setBimPendingFile: (file) => set({ bimPendingFile: file }),
+  setBtiPendingFile: (file) => set({ btiPendingFile: file }),
 }))

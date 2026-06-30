@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { extractRooms } from '../../services/claudeApi'
 import { useAppStore } from '../../store/useAppStore'
@@ -222,6 +222,7 @@ function MarkerPin({ number, type, x, y, selected }) {
 export default function BTIRecognizer({ onClose }) {
   const {
     btiPlanImage, btiRooms, btiMarkers, btiRoomMasks,
+    btiPendingFile, setBtiPendingFile,
     setBtiPlanImage, setBtiRooms, mergeBtiRooms,
     setBtiMarker, removeBtiMarker,
     setBtiRoomMask, removeBtiRoomMask,
@@ -290,6 +291,17 @@ export default function BTIRecognizer({ onClose }) {
         : `Ошибка: ${e.message}`)
     } finally { setLoading(false); setLoadMsg('') }
   }, [setBtiPlanImage, setBtiRooms])
+
+  // ── потребляем файл, дропнутый через глобальный оверлей App.jsx ──────────
+  useEffect(() => {
+    if (!btiPendingFile) return
+    const file = btiPendingFile
+    setBtiPendingFile(null)
+    clearBti()
+    planCanvasRef.current = null
+    planOrigB64Ref.current = null
+    processFile(file)
+  }, [btiPendingFile]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── fallback: извлечь помещения из самого плана (менее точно) ────────────
   const extractFromPlan = useCallback(async () => {
