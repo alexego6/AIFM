@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
-import { extractRooms } from '../../services/claudeApi'
+import { extractRooms, extractRoomPositions } from '../../services/claudeApi'
 import { useAppStore } from '../../store/useAppStore'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
@@ -236,7 +236,9 @@ export default function BTIRecognizer({ onClose }) {
   const [pendingRoom,   setPendingRoom]   = useState(null)
   const [selectedNum,   setSelectedNum]   = useState(null)
   const [exLoading,     setExLoading]     = useState(false)
-  const [stagedFiles,   setStagedFiles]   = useState([])   // файлы экспликации до запуска распознавания
+  const [stagedFiles,   setStagedFiles]   = useState([])
+  const [autoPlacing,   setAutoPlacing]   = useState(false)  // идёт авторасстановка
+  const [reviewMode,    setReviewMode]    = useState(false)  // режим проверки после авто
 
   const planImgRef    = useRef(null)
   const exInputRef    = useRef(null)
@@ -337,6 +339,36 @@ export default function BTIRecognizer({ onClose }) {
       setError(`Ошибка экспликации: ${e.message}`)
     } finally { setExLoading(false) }
   }, [stagedFiles, mergeBtiRooms])
+
+  // ── авторасстановка маркеров: Claude находит позиции подписей на плане ───
+  const autoPlaceMarkers = useCallback(async () => {
+    if (!planCanvasRef.current || btiRooms.length === 0) return
+    setAutoPlacing(true); setError(null)
+    try {
+      const cv  = planCanvasRef.current
+      const b64 = toDataUrl(cv, 0.92).split(',')[1]
+      const positions = await extractRoomPositions(b64, 'image/jpeg')
+      if (!Array.isArray(positions)) return
+
+      let placed = 0
+      for (const pos of positions) {
+        if (!pos.number || pos.x == null || pos.y == null) continue
+        const room = btiRooms.find(r => r.number === String(pos.number))
+        if (!room) continue
+        const x = Math.max(0.01, Math.min(0.99, pos.x))
+        const y = Math.max(0.01, Math.min(0.99, pos.y))
+        setBtiMarker(room.number, { x, y })
+        const mask = floodFillRoom(cv, Math.round(x * cv.width), Math.round(y * cv.height), TYPE_COLOR[room.type] || TYPE_COLOR.other)
+        if (mask) setBtiRoomMask(room.number, mask)
+        placed++
+      }
+      if (placed > 0) setReviewMode(true)
+    } catch (e) {
+      setError(e.code === 'NO_KEY'
+        ? 'Добавьте VITE_ANTHROPIC_API_KEY в .env'
+        : `Ошибка автоматического размещения: ${e.message}`)
+    } finally { setAutoPlacing(false) }
+  }, [btiRooms, setBtiMarker, setBtiRoomMask])
 
   // ── drag-and-drop зона ────────────────────────────────────────────────────
   const onDrop = useCallback(e => {
@@ -488,6 +520,58 @@ export default function BTIRecognizer({ onClose }) {
           <input type="file" accept={ACCEPT} style={{ display:'none' }} onChange={e => { if (e.target.files[0]) { clearBti(); planCanvasRef.current = null; planOrigB64Ref.current = null; processFile(e.target.files[0]) }}}/>
         </label>
       </div>
+
+      {/* Баннер: авторасстановка предложена (комнаты есть, маркеров нет) */}
+      {btiRooms.length > 0 && Object.keys(btiMarkers).length === 0 && !autoPlacing && !reviewMode && !pendingRoom && (
+        <div style={{ flex:'none', background:'linear-gradient(90deg,#F0FDF4,#ECFDF5)', borderBottom:'1px solid #A7F3D0', padding:'10px 18px', display:'flex', alignItems:'center', gap:12 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+          <span style={{ fontSize:13, color:'#065F46', fontWeight:500, flex:1 }}>
+            Список помещений загружен. Расставить маркеры на план автоматически?
+          </span>
+          <button
+            onClick={autoPlaceMarkers}
+            style={{ display:'flex', alignItems:'center', gap:6, background:'linear-gradient(135deg,#059669,#10B981)', color:'#fff', border:'none', borderRadius:8, padding:'7px 16px', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            Расставить автоматически
+          </button>
+          <button
+            onClick={() => setReviewMode(true)}
+            style={{ fontSize:12, color:'#6B7280', background:'none', border:'1px solid #E8ECF5', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}
+          >
+            Расставить вручную
+          </button>
+        </div>
+      )}
+
+      {/* Баннер: идёт авторасстановка */}
+      {autoPlacing && (
+        <div style={{ flex:'none', background:'linear-gradient(90deg,#EEF2FF,#F5F3FF)', borderBottom:'1px solid #C7D2FE', padding:'10px 18px', display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ display:'flex', gap:4 }}>
+            {[0,1,2].map(i => <div key={i} style={{ width:7, height:7, borderRadius:'50%', background:'#6366F1', animation:`bimDot 1s ease-in-out ${i*0.15}s infinite` }}/>)}
+          </div>
+          <span style={{ fontSize:13, color:'#3730A3', fontWeight:500 }}>
+            Claude анализирует план и расставляет маркеры…
+          </span>
+        </div>
+      )}
+
+      {/* Баннер: режим проверки после авторасстановки */}
+      {reviewMode && !autoPlacing && !pendingRoom && (
+        <div style={{ flex:'none', background:'linear-gradient(90deg,#FFF7ED,#FFFBEB)', borderBottom:'1px solid #FCD34D', padding:'10px 18px', display:'flex', alignItems:'center', gap:12 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          <span style={{ fontSize:13, color:'#92400E', fontWeight:500, flex:1 }}>
+            Проверьте расположение маркеров. Перетащите неверно размещённые или нажмите <svg style={{verticalAlign:'middle'}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> для ручной установки.
+          </span>
+          <button
+            onClick={() => setReviewMode(false)}
+            style={{ display:'flex', alignItems:'center', gap:6, background:'linear-gradient(135deg,#059669,#10B981)', color:'#fff', border:'none', borderRadius:8, padding:'7px 16px', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+            Всё верно
+          </button>
+        </div>
+      )}
 
       {/* Баннер размещения маркера */}
       {pendingRoom && (
