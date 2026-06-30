@@ -7,7 +7,9 @@ import ScheduleTO from './components/ScheduleTO/ScheduleTO'
 import WearPrediction from './components/WearPrediction/WearPrediction'
 import Tickets from './components/Tickets/Tickets'
 import Dashboard from './components/Dashboard/Dashboard'
+import TZAnalyzer from './components/TZAnalyzer/TZAnalyzer'
 import { useAppStore } from './store/useAppStore'
+import { useTZStore } from './store/useTZStore'
 import './index.css'
 
 const SECTION_LABELS = {
@@ -18,12 +20,16 @@ const SECTION_LABELS = {
   'wear':         'Прогноз износа',
   'tickets':      'Тикеты',
   'dashboard':    'Дашборд',
+  'tz-analysis':  'Анализ ТЗ',
 }
+
+const TZ_MIME = /^(application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/pdf|text\/plain)/
 
 const BTI_MIME = /^(application\/pdf|image\/)/
 
 export default function App() {
   const { activeSection, setActiveSection, setBimPendingFile, setBtiPendingFile } = useAppStore()
+  const { setTzPendingFile } = useTZStore()
   const [globalDrag, setGlobalDrag] = useState(false)
 
   const onGlobalDragOver = useCallback((e) => {
@@ -47,8 +53,10 @@ export default function App() {
       setActiveSection('bim')
     } else if (activeSection === 'building' && BTI_MIME.test(file.type)) {
       setBtiPendingFile(file)
+    } else if (activeSection === 'tz-analysis' && (TZ_MIME.test(file.type) || /\.(docx|txt)$/i.test(file.name))) {
+      setTzPendingFile(file)
     }
-  }, [setBimPendingFile, setBtiPendingFile, setActiveSection, activeSection])
+  }, [setBimPendingFile, setBtiPendingFile, setTzPendingFile, setActiveSection, activeSection])
 
   const renderContent = () => {
     switch (activeSection) {
@@ -58,6 +66,7 @@ export default function App() {
       case 'wear':         return <WearPrediction />
       case 'tickets':      return <Tickets />
       case 'dashboard':    return <Dashboard />
+      case 'tz-analysis':  return <TZAnalyzer />
       default:             return null
     }
   }
@@ -91,6 +100,16 @@ export default function App() {
               </svg>
               <div style={{ fontSize:24, fontWeight:700, color:'#4338CA' }}>Отпустите план БТИ</div>
               <div style={{ fontSize:14, color:'#6366F1', opacity:0.85 }}>PDF или фото поэтажного плана</div>
+            </div>
+          ) : activeSection === 'tz-analysis' ? (
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, zIndex:1 }}>
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="1.4">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <path d="M8 13h8M8 17h5"/>
+              </svg>
+              <div style={{ fontSize:24, fontWeight:700, color:'#4338CA' }}>Отпустите файл ТЗ</div>
+              <div style={{ fontSize:14, color:'#6366F1', opacity:0.85 }}>DOCX, PDF или TXT с техническим заданием</div>
             </div>
           ) : (
             <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, zIndex:1 }}>
