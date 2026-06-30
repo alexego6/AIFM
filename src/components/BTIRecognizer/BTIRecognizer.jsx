@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { extractRooms } from '../../services/claudeApi'
 import { useAppStore } from '../../store/useAppStore'

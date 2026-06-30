@@ -10,4 +10,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['web-ifc', 'web-ifc-three'],
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.js'],
+  },
 })

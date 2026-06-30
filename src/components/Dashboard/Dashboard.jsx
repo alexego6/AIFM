@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts'
 import { EQUIPMENT, SYSTEMS } from '../../data/building'

@@ -113,7 +113,6 @@ export default function ScheduleEK() {
           {['Оборудование','Тип контроля','Периодичность','Трудозатраты','Ответственный','Приоритет'].map(h => <span key={h}>{h}</span>)}
         </div>
         {rows.map(row => {
-          const sys = SYSTEMS[row.system]
           return (
             <div key={row.id} style={{ display:'grid', gridTemplateColumns:'2.4fr 1.3fr 1.1fr 1fr 1.4fr 1fr', padding:'13px 18px', fontSize:13, alignItems:'center', borderBottom:'1px solid #F0F2FA' }}>
               <span style={{ display:'flex', alignItems:'center', gap:10 }}>

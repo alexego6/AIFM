@@ -23,7 +23,6 @@ function PipelineStepper({ stage, status }) {
       {STAGES.map((s, i) => {
         const done = stage > s.n
         const active = stage === s.n
-        const future = stage < s.n
 
         const color = done ? '#059669' : active ? '#1D4ED8' : '#CBD5E1'
         const textColor = done ? '#059669' : active ? '#1D4ED8' : '#94A3B8'
@@ -117,7 +116,7 @@ export default function TZAnalyzer() {
   const [parseError, setParseError] = useState(null)
   const [stage1Progress, setStage1Progress] = useState(null) // { pct, batch, total }
 
-  useEffect(() => { loadFromDB() }, [])
+  useEffect(() => { loadFromDB() }, [loadFromDB])
 
   // Глобальный дроп маршрутизирует файл сюда
   useEffect(() => {
@@ -178,8 +177,6 @@ export default function TZAnalyzer() {
       </div>
     )
   }
-
-  const isRunning = stageStatus === 'running'
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#F8FAFC', overflow: 'hidden' }}>

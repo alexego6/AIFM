@@ -114,7 +114,7 @@ function SystemPreview({ elementIDs, systemName }) {
       disposed = true
       cancelAnimationFrame(raf)
       controls.dispose()
-      try { ifcManager.removeSubset(0, undefined, customID) } catch {}
+      try { ifcManager.removeSubset(0, undefined, customID) } catch { /* no-op */ }
       scene.traverse(o => {
         o.geometry?.dispose()
         if (o.material) [].concat(o.material).forEach(m => m.dispose())
@@ -234,7 +234,7 @@ export default function SystemsList() {
 
       // 2. Resolve element memberships via IfcRelAssignsToGroup
       let relIDs = []
-      try { relIDs = await ifcManager.getAllItemsOfType(0, IFCRELASSIGNSTOGROUP, false) } catch {}
+      try { relIDs = await ifcManager.getAllItemsOfType(0, IFCRELASSIGNSTOGROUP, false) } catch { /* no-op */ }
 
       for (const relID of relIDs) {
         try {
@@ -244,7 +244,7 @@ export default function SystemsList() {
           if (!groupID || !Array.isArray(members)) continue
           const sys = found.find(s => s.id === groupID)
           if (sys) sys.elementIDs = members.map(m => m.value).filter(v => v != null)
-        } catch {}
+        } catch { /* no-op */ }
       }
     } catch (e) {
       console.error('parseSystems:', e)

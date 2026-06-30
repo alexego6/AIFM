@@ -43,7 +43,7 @@ const idb = (() => {
 })()
 
 // ── Zustand стор ─────────────────────────────────────────────────────────────
-export const useTZStore = create((set, get) => ({
+export const useTZStore = create((set) => ({
   // Загруженный документ
   fileName: null,
   fileSize: null,

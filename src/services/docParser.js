@@ -10,7 +10,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 export async function parseFile(file) {
   const ext = file.name.split('.').pop().toLowerCase()
   const warnings = []
-  let text = ''
+  let text
 
   if (ext === 'xlsx' || ext === 'xls') {
     const ab = await file.arrayBuffer()

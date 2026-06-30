@@ -21,7 +21,7 @@ export default function FloorPlan() {
   const containerRef = useRef(null)
   const stageRef = useRef(null)
   const { activeFloor, setActiveFloor, selectedRoomId, setSelectedRoomId } = useAppStore()
-  const [tooltip, setTooltip] = useState(null)
+  const [, setTooltip] = useState(null)
 
   const floor = FLOORS.find((f) => f.id === activeFloor)
 
