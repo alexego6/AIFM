@@ -25,15 +25,13 @@ export default function TZUploadZone({ onFile }) {
         onDragOver={e => { e.preventDefault(); setDrag(true) }}
         onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false) }}
         onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
         style={{
           width: '100%', maxWidth: 560,
           border: `2px dashed ${drag ? '#1D4ED8' : '#CBD5E1'}`,
           borderRadius: 18,
           background: drag ? 'rgba(29,78,216,0.04)' : '#FFFFFF',
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          gap: 16, padding: '60px 40px',
-          cursor: 'pointer',
+          gap: 16, padding: '48px 40px',
           transition: 'border-color 0.2s, background 0.2s',
           userSelect: 'none',
         }}
@@ -49,28 +47,37 @@ export default function TZUploadZone({ onFile }) {
             {drag ? 'Отпустите файл ТЗ' : 'Загрузите техническое задание'}
           </div>
           <div style={{ fontSize: 13, color: '#64748B', lineHeight: 1.6 }}>
-            Перетащите сюда или нажмите для выбора
-            <br />
-            <strong>DOCX</strong>, <strong>XLSX</strong>, <strong>PDF</strong> или <strong>TXT</strong>
+            Перетащите файл в эту область или нажмите кнопку ниже
           </div>
         </div>
 
-        <div style={{
-          display: 'flex', gap: 8,
-          fontSize: 11, color: '#94A3B8', letterSpacing: '.3px',
+        <label style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          padding: '11px 28px', borderRadius: 10, cursor: 'pointer',
+          background: 'linear-gradient(135deg,#1D4ED8,#7C3AED)',
+          color: '#FFFFFF', fontSize: 14, fontWeight: 600,
+          fontFamily: "'Golos Text',system-ui,sans-serif",
         }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Выбрать файл
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ACCEPT}
+            style={{ display: 'none' }}
+            onChange={handleChange}
+          />
+        </label>
+
+        <div style={{ display: 'flex', gap: 8, fontSize: 11, color: '#94A3B8', letterSpacing: '.3px' }}>
           {['DOCX', 'XLSX', 'XLS', 'PDF', 'TXT'].map(fmt => (
             <span key={fmt} style={{ background: '#F1F5F9', borderRadius: 6, padding: '3px 10px' }}>{fmt}</span>
           ))}
         </div>
-
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPT}
-          style={{ display: 'none' }}
-          onChange={handleChange}
-        />
       </div>
     </div>
   )
