@@ -237,10 +237,11 @@ export default function BTIRecognizer({ onClose }) {
   const [exLoading,     setExLoading]     = useState(false)
   const [stagedFiles,   setStagedFiles]   = useState([])   // файлы экспликации до запуска распознавания
 
-  const planImgRef   = useRef(null)
-  const exInputRef   = useRef(null)
-  const draggingRef  = useRef(null)
-  const planCanvasRef = useRef(null)   // ссылка на кроп-канвас для flood-fill
+  const planImgRef    = useRef(null)
+  const exInputRef    = useRef(null)
+  const draggingRef   = useRef(null)
+  const planCanvasRef = useRef(null)   // кроп-канвас для flood-fill
+  const planOrigB64Ref = useRef(null)  // оригинальный b64 плана для fallback-распознавания
 
   // Восстанавливаем канвас из сохранённого dataURL при маунте
   useEffect(() => {
@@ -271,28 +272,38 @@ export default function BTIRecognizer({ onClose }) {
     return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
   }, [setBtiMarker])
 
-  // ── обработка файла плана ─────────────────────────────────────────────────
+  // ── обработка файла плана — только подложка, без распознавания ───────────
   const processFile = useCallback(async file => {
     setLoading(true); setError(null); setLoadMsg('Читаю файл…')
     try {
       const canvas = await fileToCanvas(file, 2)
-      const origB64 = toDataUrl(canvas).split(',')[1]
+      planOrigB64Ref.current = toDataUrl(canvas).split(',')[1]
 
       setLoadMsg('Обрезаю поля…')
       const cropped = autocropCanvas(canvas)
-      planCanvasRef.current = cropped   // сохраняем канвас для flood-fill
+      planCanvasRef.current = cropped
       setBtiPlanImage(toDataUrl(cropped, 0.92))
       setBtiRooms([])
-
-      setLoadMsg('Извлекаю список помещений…')
-      const rooms = await extractRooms(origB64, 'image/jpeg')
-      setBtiRooms(Array.isArray(rooms) ? rooms : [])
     } catch (e) {
       setError(e.code === 'NO_KEY'
         ? 'Добавьте VITE_ANTHROPIC_API_KEY в .env для распознавания'
         : `Ошибка: ${e.message}`)
     } finally { setLoading(false); setLoadMsg('') }
   }, [setBtiPlanImage, setBtiRooms])
+
+  // ── fallback: извлечь помещения из самого плана (менее точно) ────────────
+  const extractFromPlan = useCallback(async () => {
+    if (!planOrigB64Ref.current) return
+    setLoading(true); setError(null); setLoadMsg('Читаю помещения с плана…')
+    try {
+      const rooms = await extractRooms(planOrigB64Ref.current, 'image/jpeg')
+      setBtiRooms(Array.isArray(rooms) ? rooms : [])
+    } catch (e) {
+      setError(e.code === 'NO_KEY'
+        ? 'Добавьте VITE_ANTHROPIC_API_KEY в .env'
+        : `Ошибка: ${e.message}`)
+    } finally { setLoading(false); setLoadMsg('') }
+  }, [setBtiRooms])
 
   // ── обработка экспликации (все staged-файлы за один запуск) ──────────────
   const processAllExplications = useCallback(async () => {
@@ -462,7 +473,7 @@ export default function BTIRecognizer({ onClose }) {
         <label style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6, background:'none', border:'1px solid #E8ECF5', borderRadius:8, padding:'6px 12px', fontSize:12, color:'#6B7280', cursor:'pointer', fontFamily:'inherit' }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Загрузить другой
-          <input type="file" accept={ACCEPT} style={{ display:'none' }} onChange={e => { if (e.target.files[0]) { clearBti(); planCanvasRef.current = null; processFile(e.target.files[0]) }}}/>
+          <input type="file" accept={ACCEPT} style={{ display:'none' }} onChange={e => { if (e.target.files[0]) { clearBti(); planCanvasRef.current = null; planOrigB64Ref.current = null; processFile(e.target.files[0]) }}}/>
         </label>
       </div>
 
@@ -551,8 +562,22 @@ export default function BTIRecognizer({ onClose }) {
 
           <div style={{ flex:1, overflow:'auto' }}>
             {btiRooms.length === 0 && !loading ? (
-              <div style={{ padding:20, textAlign:'center', color:'#9CA3AF', fontSize:12, lineHeight:1.7 }}>
-                Данные помещений не обнаружены<br/>на плане. Добавьте экспликацию.
+              <div style={{ padding:'24px 16px', display:'flex', flexDirection:'column', alignItems:'center', gap:14, textAlign:'center' }}>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#C7D2FE" strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                <div style={{ fontSize:12, color:'#6B7280', lineHeight:1.7 }}>
+                  Добавьте файлы экспликации ниже<br/>и нажмите «Распознать»
+                </div>
+                <div style={{ width:'100%', height:1, background:'#F0F0F5' }}/>
+                <div style={{ fontSize:11, color:'#9CA3AF', lineHeight:1.6 }}>
+                  Нет экспликации?
+                </div>
+                <button
+                  onClick={extractFromPlan}
+                  style={{ display:'flex', alignItems:'center', gap:6, background:'none', border:'1px solid #E8ECF5', borderRadius:8, padding:'7px 14px', fontSize:11, color:'#6B7280', cursor:'pointer', fontFamily:'inherit' }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/></svg>
+                  Извлечь помещения из плана
+                </button>
               </div>
             ) : (
               btiRooms.map(room => {
