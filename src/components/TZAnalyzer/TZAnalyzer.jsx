@@ -240,7 +240,9 @@ export default function TZAnalyzer() {
                 <div style={{ fontSize: 14, fontWeight: 600, color: '#1E40AF' }}>Анализирую ТЗ…</div>
                 <div style={{ fontSize: 12, color: '#3730A3', marginTop: 2 }}>
                   {stage1Progress?.total > 1
-                    ? `Фрагмент ${stage1Progress.batch} из ${stage1Progress.total}`
+                    ? stage1Progress.batch === stage1Progress.total
+                      ? 'Консолидация и дедупликация объектов…'
+                      : `Сканирую фрагмент ${stage1Progress.batch} из ${stage1Progress.total - 1}`
                     : 'Извлекаю здания и объекты из документа'}
                 </div>
               </div>

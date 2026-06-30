@@ -25,88 +25,102 @@ async function callClaude(prompt, maxTokens = 4096) {
 }
 
 // ── Stage 1: определение зданий/объектов ─────────────────────────────────────
-const BUILDINGS_SCHEMA = `[{"id":"b1","name":"...","address":"...","floors":4,"area_m2":8958.5,"year_built":2015,"purpose":"административно-офисное здание"}]`
+const SCHEMA_EXAMPLE = `[{"id":"b1","name":"Офисный центр «Квартал Менделеева» корпус 1","address":"г. Москва, ул. Нобеля, д. 7","floors":4,"area_m2":8958.5,"year_built":2015,"purpose":"административно-офисное здание"}]`
 
-const STAGE1_PROMPT = (text, knownNames = []) => {
-  const exclude = knownNames.length
-    ? `\nУЖЕ НАЙДЕННЫЕ объекты (не дублируй): ${knownNames.join(' | ')}\n`
-    : ''
-  return `Ты — эксперт по технической эксплуатации объектов (Facility Management).
-Тебе предоставлен фрагмент технического задания (ТЗ) на обслуживание объектов недвижимости.
-${exclude}
-ЗАДАЧА: найди ВСЕ здания/объекты/корпуса, упомянутые в этом фрагменте. Для каждого верни:
-- id: b1, b2, b3 … (продолжи нумерацию относительно уже найденных: следующий = b${knownNames.length + 1})
-- name: официальное наименование (корпус, здание, объект)
-- address: адрес или null
-- floors: число этажей (целое) или null
-- area_m2: площадь кв.м (число) или null
-- year_built: год постройки или null
-- purpose: назначение (короткая фраза) или null
+// Промпт для сбора кандидатов из одного батча
+const EXTRACT_PROMPT = (text) => `Ты — эксперт по технической эксплуатации объектов (Facility Management).
 
-ПРАВИЛА:
-- Только реальные объекты из текста, не выдумывай
-- Не включай уже найденные (см. выше)
-- Если в этом фрагменте новых объектов нет — верни []
-- Верни ТОЛЬКО JSON-массив без markdown
+Тебе предоставлен ФРАГМЕНТ технического задания (ТЗ) на обслуживание объектов недвижимости.
 
-Пример: ${BUILDINGS_SCHEMA}
+ЗАДАЧА: выпиши ВСЕ конкретные здания/корпуса/объекты с собственными именами из этого фрагмента.
+Для каждого верни поля: id (b1, b2…), name, address, floors, area_m2, year_built, purpose.
 
-ФРАГМЕНТ ТЗ:
+ВАЖНО — включай ТОЛЬКО объекты с собственным названием или чётким адресом.
+НЕ включай: родовые описания без имени ("нежилое здание", "административное здание", "объект"), вспомогательные помещения, итоговые строки.
+Если нет новых именованных объектов — верни [].
+Верни ТОЛЬКО JSON-массив без markdown.
+
+Пример: ${SCHEMA_EXAMPLE}
+
+ФРАГМЕНТ:
 ${text}`
-}
 
-// Нормализует имя для дедупликации
-function normName(name) {
-  return name.toLowerCase().replace(/[«»""''№\s]+/g, ' ').trim()
-}
+// Промпт консолидации — второй проход
+const CONSOLIDATE_PROMPT = (candidates, context) => `Ты — эксперт по технической эксплуатации объектов (Facility Management).
+
+В результате анализа технического задания найдены следующие КАНДИДАТЫ объектов:
+${JSON.stringify(candidates, null, 2)}
+
+ЗАДАЧА — финальная очистка списка:
+1. ОБЪЕДИНИ дубли: одно здание могло быть названо по-разному в разных частях ТЗ
+   (например "Офисный центр «Квартал Менделеева» корпус 1" и "ОЦ Технопарк/Очередь 1" — одно и то же).
+   Оставь наиболее полное и официальное название.
+2. УДАЛИ записи без собственного имени ("нежилое здание", "административное здание" без конкретного названия).
+   Если у такой записи есть адрес или аббревиатура — оставь, уточни назначение.
+3. ДОПОЛНИ данные (address, floors, area_m2, year_built) из контекста ниже, если информация там есть.
+4. Переназначь id по порядку: b1, b2, b3…
+
+Верни ТОЛЬКО итоговый JSON-массив без markdown и пояснений.
+
+Пример итогового элемента: ${SCHEMA_EXAMPLE}
+
+КОНТЕКСТ (начало ТЗ):
+${context}`
 
 /**
- * Этап 1: сканирует ВСЕ чанки батчами по ~100к символов.
- * onProgress(pct, batchIdx, totalBatches) — необязательный коллбэк прогресса.
- * Возвращает Building[]
+ * Этап 1: двухпроходная схема.
+ * Проход 1 — батчи по 80к символов: собираем кандидатов.
+ * Проход 2 — консолидация + дедупликация + обогащение через Claude.
+ * onProgress(pct, batch, total) — коллбэк прогресса.
  */
 export async function runStage1(chunks, onProgress) {
-  const BATCH_SIZE = 100_000   // ~25k токенов — хорошо вписывается в контекст
+  const BATCH_SIZE = 80_000
 
-  // Собираем батчи
+  // ── Проход 1: собираем кандидатов ───────────────────────────────────────
   const batches = []
   let cur = ''
   for (const c of chunks) {
     if (cur.length + c.length > BATCH_SIZE && cur.length > 0) {
-      batches.push(cur)
-      cur = c
+      batches.push(cur); cur = c
     } else {
       cur += (cur ? '\n\n---\n\n' : '') + c
     }
   }
   if (cur) batches.push(cur)
 
-  const allBuildings = []
-  const seenNames = new Set()
+  // +1 за консолидационный шаг
+  const totalSteps = batches.length + 1
+  const candidates = []
 
   for (let i = 0; i < batches.length; i++) {
-    onProgress?.(Math.round((i / batches.length) * 100), i + 1, batches.length)
-
-    const knownNames = allBuildings.map(b => b.name)
-    const raw = await callClaude(STAGE1_PROMPT(batches[i], knownNames), 2048)
-
+    onProgress?.(Math.round((i / totalSteps) * 100), i + 1, totalSteps)
     let parsed = []
-    try { parsed = JSON.parse(raw) } catch { continue }
-
+    try {
+      const raw = await callClaude(EXTRACT_PROMPT(batches[i]), 2048)
+      parsed = JSON.parse(raw)
+    } catch { /* пропускаем плохой батч */ }
     for (const b of parsed) {
-      if (!b.name) continue
-      const key = normName(b.name)
-      if (!seenNames.has(key)) {
-        seenNames.add(key)
-        allBuildings.push(b)
-      }
+      if (b.name) candidates.push(b)
     }
   }
 
-  onProgress?.(100, batches.length, batches.length)
+  // ── Проход 2: консолидация ───────────────────────────────────────────────
+  onProgress?.(Math.round((batches.length / totalSteps) * 100), batches.length + 1, totalSteps)
 
-  // Переназначаем id по порядку
-  return allBuildings.map((b, i) => ({
+  // Контекст для консолидации — первые 30к символов (обычно там общее описание объектов)
+  const context = chunks.slice(0, 5).join('\n\n---\n\n').slice(0, 30_000)
+
+  let buildings = candidates
+  if (candidates.length > 0) {
+    try {
+      const raw = await callClaude(CONSOLIDATE_PROMPT(candidates, context), 3000)
+      buildings = JSON.parse(raw)
+    } catch { /* оставляем кандидатов как есть */ }
+  }
+
+  onProgress?.(100, totalSteps, totalSteps)
+
+  return buildings.map((b, i) => ({
     id: `b${i + 1}`,
     name: b.name ?? 'Объект без названия',
     address: b.address ?? null,
