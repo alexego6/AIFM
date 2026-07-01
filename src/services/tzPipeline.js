@@ -20,6 +20,9 @@ async function callClaude(prompt, maxTokens = 4096) {
   })
   if (!res.ok) { const e = new Error(`API ${res.status}`); e.code = 'API_ERROR'; throw e }
   const data = await res.json()
+  if (data.stop_reason === 'max_tokens') {
+    const e = new Error('Response truncated by max_tokens'); e.code = 'TRUNCATED'; throw e
+  }
   const text = data.content?.[0]?.text
   if (!text) { const e = new Error('Empty API response'); e.code = 'EMPTY_RESPONSE'; throw e }
   return text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
@@ -116,15 +119,38 @@ ${SCHEMA_EXAMPLE}
 КОНТЕКСТ (начало документа ТЗ):
 ${context}`
 
-// ── shared helper ─────────────────────────────────────────────────────────────
+// ── shared helpers ────────────────────────────────────────────────────────────
+function splitChunk(chunk, maxSize) {
+  if (chunk.length <= maxSize) return [chunk]
+  // TODO: add char-level fallback for lines > maxSize (e.g. dense table rows without \n)
+  const parts = []
+  let cur = ''
+  for (const line of chunk.split('\n')) {
+    const sep = cur ? '\n' : ''
+    if (cur.length + sep.length + line.length > maxSize && cur.length > 0) {
+      parts.push(cur)
+      // carry last paragraph into next piece so equipment descriptions aren't cut at boundary
+      const lastPara = cur.lastIndexOf('\n\n')
+      const tail = lastPara >= 0 ? cur.slice(lastPara + 2) : cur.slice(-400)
+      cur = (tail.trim() ? tail + '\n' : '') + line
+    } else {
+      cur += sep + line
+    }
+  }
+  if (cur.trim()) parts.push(cur)
+  return parts.length > 0 ? parts : [chunk]
+}
+
 function makeBatches(chunks, batchSize) {
   const batches = []
   let cur = ''
   for (const c of chunks) {
-    if (cur.length + c.length > batchSize && cur.length > 0) {
-      batches.push(cur); cur = c
-    } else {
-      cur += (cur ? '\n\n---\n\n' : '') + c
+    for (const piece of splitChunk(c, batchSize)) {
+      if (cur.length + piece.length > batchSize && cur.length > 0) {
+        batches.push(cur); cur = piece
+      } else {
+        cur += (cur ? '\n\n---\n\n' : '') + piece
+      }
     }
   }
   if (cur) batches.push(cur)
@@ -352,25 +378,54 @@ function normalizeSystemsResult(rawData, buildings) {
   })
 }
 
+const S2_BATCH_SIZE = 8_000
+const S2_MAX_TOKENS = 16_000
+const S2_CONSOLIDATE_MAX_TOKENS = 12_000
+
+async function extractWithBisect(buildings, text, depth = 4, log = () => {}) {
+  try {
+    const raw = await callClaude(EXTRACT_SYSTEMS_PROMPT(buildings, text), S2_MAX_TOKENS)
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) throw new Error('NOT_ARRAY')
+    return parsed
+  } catch (err) {
+    if (depth === 0 || text.length < 200) {
+      if (text.trim()) {
+        const warn = `[bisect WARNING] dropping ${text.length} chars, depth exhausted — ${err.message}`
+        console.warn(warn)
+        log(warn)
+      }
+      log(`[bisect] min reached (${text.length} chars), 0 entries`)
+      return []
+    }
+    const reason = err.code === 'TRUNCATED' ? 'max_tokens' : err.message.slice(0, 50)
+    const mid = Math.floor(text.length / 2)
+    const cut = (text.indexOf('\n', mid) + 1) || mid
+    log(`[bisect depth=${depth}] ${text.length} chars → ${cut} + ${text.length - cut} (${reason})`)
+    const [left, right] = await Promise.all([
+      extractWithBisect(buildings, text.slice(0, cut), depth - 1, log),
+      extractWithBisect(buildings, text.slice(cut), depth - 1, log),
+    ])
+    return [...left, ...right]
+  }
+}
+
 /**
  * Этап 2: двухпроходная схема — инженерные системы.
- * Проход 1 — батчи 80к: собираем сырые системы по зданиям.
+ * Проход 1 — батчи S2_BATCH_SIZE с бисекцией при обрыве: собираем сырые системы.
  * Проход 2 — консолидация, дедупликация, обогащение.
  * onProgress(pct, batch, total)
  */
 export async function runStage2(buildings, chunks, onProgress) {
-  const BATCH_SIZE = 80_000
-  const batches = makeBatches(chunks, BATCH_SIZE)
+  const batches = makeBatches(chunks, S2_BATCH_SIZE)
   const totalSteps = batches.length + 1
   const rawResults = []
 
   for (let i = 0; i < batches.length; i++) {
     onProgress?.(Math.round((i / totalSteps) * 100), i + 1, totalSteps)
-    try {
-      const raw = await callClaude(EXTRACT_SYSTEMS_PROMPT(buildings, batches[i]), 4096)
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) rawResults.push(...parsed)
-    } catch { /* пропускаем плохой батч */ }
+    const log = msg => console.log(`  s2b${i + 1}/${batches.length}: ${msg}`)
+    const results = await extractWithBisect(buildings, batches[i], 4, log)
+    rawResults.push(...results)
   }
 
   onProgress?.(Math.round((batches.length / totalSteps) * 100), batches.length + 1, totalSteps)
@@ -380,7 +435,7 @@ export async function runStage2(buildings, chunks, onProgress) {
 
   if (rawResults.length > 0) {
     try {
-      const raw = await callClaude(CONSOLIDATE_SYSTEMS_PROMPT(rawResults, buildings, context), 6000)
+      const raw = await callClaude(CONSOLIDATE_SYSTEMS_PROMPT(rawResults, buildings, context), S2_CONSOLIDATE_MAX_TOKENS)
       finalData = JSON.parse(raw)
     } catch { /* оставляем сырые данные */ }
   }
