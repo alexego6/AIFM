@@ -116,6 +116,21 @@ ${SCHEMA_EXAMPLE}
 КОНТЕКСТ (начало документа ТЗ):
 ${context}`
 
+// ── shared helper ─────────────────────────────────────────────────────────────
+function makeBatches(chunks, batchSize) {
+  const batches = []
+  let cur = ''
+  for (const c of chunks) {
+    if (cur.length + c.length > batchSize && cur.length > 0) {
+      batches.push(cur); cur = c
+    } else {
+      cur += (cur ? '\n\n---\n\n' : '') + c
+    }
+  }
+  if (cur) batches.push(cur)
+  return batches
+}
+
 /**
  * Этап 1: двухпроходная схема.
  * Проход 1 — батчи по 80к символов: собираем кандидатов.
@@ -126,16 +141,7 @@ export async function runStage1(chunks, onProgress) {
   const BATCH_SIZE = 80_000
 
   // ── Проход 1: собираем кандидатов ───────────────────────────────────────
-  const batches = []
-  let cur = ''
-  for (const c of chunks) {
-    if (cur.length + c.length > BATCH_SIZE && cur.length > 0) {
-      batches.push(cur); cur = c
-    } else {
-      cur += (cur ? '\n\n---\n\n' : '') + c
-    }
-  }
-  if (cur) batches.push(cur)
+  const batches = makeBatches(chunks, BATCH_SIZE)
 
   // +1 за консолидационный шаг
   const totalSteps = batches.length + 1
@@ -181,4 +187,204 @@ export async function runStage1(chunks, onProgress) {
       ? b.sub_buildings.filter(s => typeof s === 'string' && s.trim())
       : [],
   }))
+}
+
+// ── Stage 2: инженерные системы ───────────────────────────────────────────────
+
+const VALID_CATEGORIES = new Set([
+  'heating', 'hvac', 'plumbing', 'electrical', 'fire',
+  'security', 'lowcurrent', 'media', 'bms', 'elevator', 'structural', 'other',
+])
+
+const SYSTEMS_SCHEMA = `[
+  {
+    "buildingId": "b1",
+    "systems": [
+      {
+        "id": "b1-hvac-1",
+        "category": "hvac",
+        "name": "Система вентиляции и кондиционирования",
+        "scope": "building",
+        "subBuildingId": null,
+        "basisNorms": ["СП 60.13330"],
+        "notes": "Центральная, 3 зоны",
+        "needsReview": false,
+        "equipment": [
+          {
+            "id": "b1-hvac-1-eq-1",
+            "name": "Приточная установка",
+            "tag": "ПУ-1",
+            "class": "air_handling_unit",
+            "brand": "Lessar",
+            "model": "LV-100",
+            "qty": 1,
+            "capacity": "5000 м³/ч",
+            "location": "венткамера, 2 эт.",
+            "confidence": "high"
+          },
+          {
+            "id": "b1-hvac-1-eq-2",
+            "name": "Чиллер",
+            "tag": null,
+            "class": "chiller",
+            "brand": "York",
+            "model": "YK",
+            "qty": 2,
+            "capacity": null,
+            "location": "кровля",
+            "confidence": "medium"
+          }
+        ]
+      }
+    ]
+  }
+]`
+
+const EXTRACT_SYSTEMS_PROMPT = (buildings, text) => `Ты — эксперт по технической эксплуатации зданий (Facility Management).
+
+Тебе предоставлен ФРАГМЕНТ технического задания на обслуживание объектов.
+
+ИЗВЕСТНЫЕ ОБЪЕКТЫ (из Этапа 1):
+${buildings.map(b => `• ${b.id}: ${b.name}${b.address ? ', ' + b.address : ''}${b.sub_buildings?.length ? ' [строения: ' + b.sub_buildings.join(', ') + ']' : ''}`).join('\n')}
+
+ЗАДАЧА: найди в фрагменте ИНЖЕНЕРНЫЕ СИСТЕМЫ и ОБОРУДОВАНИЕ, относящиеся к этим объектам.
+Верни JSON-массив — по одной записи на объект, в котором найдено хоть что-то.
+
+КАТЕГОРИИ (category):
+heating — теплоснабжение, ИТП, тепловые пункты, котельные
+hvac — вентиляция, кондиционирование, холодоснабжение, фанкойлы
+plumbing — водоснабжение, канализация, ХВС, ГВС, водоотведение
+electrical — электроснабжение, ВРУ, трансформаторные подстанции, щиты освещения
+fire — АПС, пожаротушение (АУПТ), СОУЭ, противодымная защита
+security — охранная сигнализация, СКУД, видеонаблюдение
+lowcurrent — ЛВС, СКС, структурированная кабельная сеть, АТС, телефония, АВК
+media — аудио/видео, конференц-системы, цифровые вывески
+bms — диспетчеризация, BMS, АСУД, АСУ ТП, щиты автоматики
+elevator — лифты, подъёмники, эскалаторы
+structural — кровля, фасад, окна, полы, несущие конструкции, благоустройство
+other — всё что не вошло выше
+
+ПОЛЯ:
+scope: "building" (система для всего объекта) | "sub_building" (для одного из строений комплекса)
+subBuildingId: название строения из списка sub_buildings или null
+needsReview: true если данные неполные, противоречивые или неясно какому объекту принадлежит система
+confidence у оборудования: "high" (есть марка/модель/позиция), "medium" (только тип), "low" (упомянуто вскользь)
+qty: обязательно число, минимум 1
+
+ПРАВИЛА:
+• Если система явно не привязана к конкретному объекту — относи к единственному/основному объекту.
+• Для комплексов (scope=sub_building) указывай subBuildingId = название строения из sub_buildings.
+• НЕ придумывай характеристики — ставь null, если данных нет.
+• Если в фрагменте нет систем — верни [].
+• Верни ТОЛЬКО JSON-массив без markdown.
+
+Пример:
+${SYSTEMS_SCHEMA}
+
+ФРАГМЕНТ ТЗ:
+${text}`
+
+const CONSOLIDATE_SYSTEMS_PROMPT = (rawSystems, buildings, context) => `Ты — эксперт по технической эксплуатации объектов (Facility Management).
+
+Из разных фрагментов ТЗ извлечены СЫРЫЕ данные об инженерных системах (могут содержать дубли и пропущенные поля):
+
+${JSON.stringify(rawSystems, null, 2)}
+
+ОБЪЕКТЫ для справки:
+${buildings.map(b => `• ${b.id}: ${b.name}${b.sub_buildings?.length ? ' [строения: ' + b.sub_buildings.join(', ') + ']' : ''}`).join('\n')}
+
+ЗАДАЧА — финальная структуризация:
+1. Для каждого buildingId: объедини дублирующиеся системы одной категории в одну
+2. Если одна система упомянута в нескольких фрагментах — объедини данные, выбирая наиболее полные поля
+3. Для оборудования: если одна позиция встречается дважды — один объект с qty=сумма
+4. Дополни пустые поля (brand, model, capacity, location, basisNorms) из контекста ниже
+5. needsReview=true если хоть в одном экземпляре было true или остались неясности
+6. Переназначь id: {buildingId}-{category}-{N} для систем, {sysId}-eq-{M} для оборудования
+
+Верни ТОЛЬКО итоговый JSON-массив без markdown. Та же схема:
+${SYSTEMS_SCHEMA}
+
+КОНТЕКСТ (начало документа ТЗ):
+${context}`
+
+function normalizeSystemsResult(rawData, buildings) {
+  // Group by buildingId
+  const byBuilding = {}
+  for (const b of buildings) byBuilding[b.id] = []
+
+  for (const entry of (Array.isArray(rawData) ? rawData : [])) {
+    const bId = entry.buildingId
+    if (!bId) continue
+    if (!byBuilding[bId]) byBuilding[bId] = []
+    if (Array.isArray(entry.systems)) byBuilding[bId].push(...entry.systems)
+  }
+
+  return buildings.map(b => {
+    const systems = (byBuilding[b.id] || []).map((sys, si) => {
+      const cat = VALID_CATEGORIES.has(sys.category) ? sys.category : 'other'
+      const sysId = `${b.id}-${cat}-${si + 1}`
+      return {
+        id: sysId,
+        category: cat,
+        name: sys.name ?? 'Система без названия',
+        scope: sys.scope === 'sub_building' ? 'sub_building' : 'building',
+        subBuildingId: sys.subBuildingId ?? null,
+        basisNorms: Array.isArray(sys.basisNorms) ? sys.basisNorms.filter(Boolean) : [],
+        notes: sys.notes ?? null,
+        needsReview: !!sys.needsReview,
+        equipment: Array.isArray(sys.equipment)
+          ? sys.equipment.map((eq, ei) => ({
+              id: `${sysId}-eq-${ei + 1}`,
+              name: eq.name ?? 'Оборудование',
+              tag: eq.tag ?? null,
+              class: eq.class ?? 'other',
+              brand: eq.brand ?? null,
+              model: eq.model ?? null,
+              qty: typeof eq.qty === 'number' && eq.qty > 0 ? Math.round(eq.qty) : 1,
+              capacity: eq.capacity ?? null,
+              location: eq.location ?? null,
+              confidence: ['high', 'medium', 'low'].includes(eq.confidence) ? eq.confidence : 'medium',
+            }))
+          : [],
+      }
+    })
+    return { buildingId: b.id, systems }
+  })
+}
+
+/**
+ * Этап 2: двухпроходная схема — инженерные системы.
+ * Проход 1 — батчи 80к: собираем сырые системы по зданиям.
+ * Проход 2 — консолидация, дедупликация, обогащение.
+ * onProgress(pct, batch, total)
+ */
+export async function runStage2(buildings, chunks, onProgress) {
+  const BATCH_SIZE = 80_000
+  const batches = makeBatches(chunks, BATCH_SIZE)
+  const totalSteps = batches.length + 1
+  const rawResults = []
+
+  for (let i = 0; i < batches.length; i++) {
+    onProgress?.(Math.round((i / totalSteps) * 100), i + 1, totalSteps)
+    try {
+      const raw = await callClaude(EXTRACT_SYSTEMS_PROMPT(buildings, batches[i]), 4096)
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) rawResults.push(...parsed)
+    } catch { /* пропускаем плохой батч */ }
+  }
+
+  onProgress?.(Math.round((batches.length / totalSteps) * 100), batches.length + 1, totalSteps)
+
+  const context = chunks.slice(0, 5).join('\n\n---\n\n').slice(0, 30_000)
+  let finalData = rawResults
+
+  if (rawResults.length > 0) {
+    try {
+      const raw = await callClaude(CONSOLIDATE_SYSTEMS_PROMPT(rawResults, buildings, context), 6000)
+      finalData = JSON.parse(raw)
+    } catch { /* оставляем сырые данные */ }
+  }
+
+  onProgress?.(100, totalSteps, totalSteps)
+  return normalizeSystemsResult(finalData, buildings)
 }

@@ -59,9 +59,7 @@ export const useTZStore = create((set) => ({
 
   // Результаты этапов
   buildings: [],       // Building[] — Этап 1
-  // buildings[i].systems  — Этап 2
-  // buildings[i].tasks    — Этап 3
-  // buildings[i].resource — Этап 5
+  systems: [],         // { buildingId, systems: System[] }[] — Этап 2
 
   // ── действия ─────────────────────────────────────────────────────────────
   setFile: async (name, size) => {
@@ -88,11 +86,16 @@ export const useTZStore = create((set) => ({
     buildings: s.buildings.map(b => b.id === id ? { ...b, ...patch } : b),
   })),
 
+  setSystems: async (systems) => {
+    set({ systems })
+    await idb.set('systems', systems)
+  },
+
   reset: async () => {
     set({
       fileName: null, fileSize: null, parseWarnings: [],
       chunks: [], stage: 0, stageStatus: 'idle', stageError: null,
-      buildings: [],
+      buildings: [], systems: [],
     })
     await idb.clear()
   },
@@ -104,15 +107,17 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, meta] = await Promise.all([
+    const [chunks, buildings, systems, meta] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
+      idb.get('systems'),
       idb.get('meta'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
     if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = 0; patch.stageStatus = 'done' }
-    if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'checkpoint' }
+    if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'done' }
+    if (systems?.length)   { patch.systems   = systems;   patch.stage = 2; patch.stageStatus = 'checkpoint' }
     if (Object.keys(patch).length) set(patch)
   },
 }))

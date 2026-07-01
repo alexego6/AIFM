@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { useTZStore } from '../../store/useTZStore'
 import { parseFile } from '../../services/docParser'
 import { chunkByHeadings } from '../../services/chunkText'
-import { runStage1 } from '../../services/tzPipeline'
+import { runStage1, runStage2 } from '../../services/tzPipeline'
 import TZUploadZone from './TZUploadZone'
 import TZBuildingTabs from './TZBuildingTabs'
+import TZSystemsView from './TZSystemsView'
 
 // ── Пайплайн-степпер ──────────────────────────────────────────────────────────
 const STAGES = [
@@ -107,14 +108,15 @@ export default function TZAnalyzer() {
   const {
     fileName, fileSize, parseWarnings,
     chunks, stage, stageStatus, stageError,
-    buildings,
-    setFile, setChunks, setParseWarnings, setStage, setBuildings,
+    buildings, systems,
+    setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
 
   const [parseError, setParseError] = useState(null)
   const [stage1Progress, setStage1Progress] = useState(null) // { pct, batch, total }
+  const [stage2Progress, setStage2Progress] = useState(null) // { pct, batch, total }
 
   useEffect(() => { loadFromDB() }, [loadFromDB])
 
@@ -162,6 +164,27 @@ export default function TZAnalyzer() {
 
   function confirmStage1() {
     setStage(1, 'done')
+  }
+
+  // ── Этап 2: инженерные системы ──────────────────────────────────────────────
+  async function handleStage2() {
+    setStage(2, 'running')
+    setStage2Progress({ pct: 0, batch: 0, total: 0 })
+    try {
+      const result = await runStage2(buildings, chunks, (pct, batch, total) => {
+        setStage2Progress({ pct, batch, total })
+      })
+      await setSystems(result)
+      setStage2Progress(null)
+      setStage(2, 'checkpoint')
+    } catch (err) {
+      setStage2Progress(null)
+      setStage(2, 'error', err.message)
+    }
+  }
+
+  function confirmStage2() {
+    setStage(2, 'done')
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -299,9 +322,82 @@ export default function TZAnalyzer() {
               <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Объекты подтверждены: {buildings.length}</div>
             </div>
             <TZBuildingTabs buildings={buildings} />
+            <RunButton label="Определить инженерные системы (Этап 2)" onClick={handleStage2} disabled={false} running={false} />
+          </div>
+        )}
+
+        {/* Этап 2 — выполняется */}
+        {stage === 2 && stageStatus === 'running' && (
+          <div style={{ background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 14, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: stage2Progress?.total > 1 ? 12 : 0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" strokeWidth="2.2" style={{ animation: 'spin 1s linear infinite', flex: 'none' }}>
+                <path d="M21 12a9 9 0 1 1-6-8.5"/>
+              </svg>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#1E40AF' }}>Извлекаю инженерные системы…</div>
+                <div style={{ fontSize: 12, color: '#3730A3', marginTop: 2 }}>
+                  {stage2Progress?.total > 1
+                    ? stage2Progress.batch === stage2Progress.total
+                      ? 'Консолидация и дедупликация систем…'
+                      : `Сканирую фрагмент ${stage2Progress.batch} из ${stage2Progress.total - 1}`
+                    : 'Анализирую состав инженерных систем и оборудования'}
+                </div>
+              </div>
+            </div>
+            {stage2Progress?.total > 1 && (
+              <div style={{ background: '#C7D2FE', borderRadius: 4, height: 4, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 4,
+                  background: 'linear-gradient(90deg,#1D4ED8,#7C3AED)',
+                  width: `${stage2Progress.pct}%`,
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Этап 2 — ошибка */}
+        {stage === 2 && stageStatus === 'error' && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 14, padding: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#B91C1C', marginBottom: 6 }}>Ошибка при анализе систем</div>
+            <div style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{stageError}</div>
+            <RunButton label="Повторить Этап 2" onClick={handleStage2} running={false} />
+          </div>
+        )}
+
+        {/* Этап 2 — чекпоинт */}
+        {stage === 2 && stageStatus === 'checkpoint' && systems.length > 0 && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', flex: 'none' }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>
+                Инженерные системы извлечены — проверьте
+              </div>
+            </div>
+            <TZSystemsView systemsData={systems} buildings={buildings} />
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <RunButton label="Подтвердить →" onClick={confirmStage2} running={false} />
+              <button
+                onClick={handleStage2}
+                style={{ padding: '11px 20px', borderRadius: 10, border: '1px solid #CBD5E1', background: '#FFFFFF', fontSize: 14, color: '#64748B', cursor: 'pointer', fontFamily: "'Golos Text',system-ui,sans-serif" }}
+              >
+                Повторить
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Этап 2 — подтверждён */}
+        {stage === 2 && stageStatus === 'done' && systems.length > 0 && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', flex: 'none' }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Инженерные системы подтверждены</div>
+            </div>
+            <TZSystemsView systemsData={systems} buildings={buildings} />
             <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: '#166534' }}>
-              Этап 2 (Инженерные системы) — будет доступен в следующей версии.
-              Нажмите «Подтвердить» когда Этап 1 пройден для продолжения.
+              Этап 3 (Задачи технического обслуживания) — будет доступен в следующей версии.
             </div>
           </div>
         )}
