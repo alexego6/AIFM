@@ -112,7 +112,7 @@ export default function TZAnalyzer() {
     buildings, systems,
     scheduleStatus, scheduleTableCount, scheduleTables, htmlContent,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
-    setHtmlContent, setScheduleStatus, setScheduleTables,
+    setHtmlContent, setScheduleStatus, setScheduleTables, confirmStage,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
@@ -224,6 +224,16 @@ export default function TZAnalyzer() {
       // No schedule found (or not a DOCX) → stub
       setStage(3, 'no_schedule')
     }
+  }
+
+  // Stage 3 confirmed → advance to Stage 4 (show schedule matrix)
+  function confirmStage3() {
+    setStage(4, 'checkpoint')
+  }
+
+  // Stage 4 confirmed → persist to IDB and advance to Stage 4 done
+  async function confirmStage4() {
+    await confirmStage(4)
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -480,20 +490,70 @@ export default function TZAnalyzer() {
           </div>
         )}
 
-        {/* Этап 3 — задачи извлечены */}
-        {stage === 3 && stageStatus === 'done' && systems.length > 0 && (
+        {/* Этап 3 — задачи извлечены (показ систем + кнопка перехода к графику) */}
+        {stage === 3 && stageStatus === 'done' && systems.length > 0 && (() => {
+          const totalSystems = systems.reduce((n, b) => n + (b.systems?.length ?? 0), 0)
+          const withTasks = systems.reduce((n, b) =>
+            n + (b.systems?.filter(s => s.maintenanceTasks?.length > 0).length ?? 0), 0)
+          return (
+            <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', flex: 'none' }} />
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Задачи ЭК/ТО извлечены из графика</div>
+                <div style={{ fontSize: 12, color: '#64748B' }}>{scheduleTableCount} таблиц · 0 API-вызовов</div>
+              </div>
+              <TZSystemsView systemsData={systems} buildings={buildings} />
+              <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+                <div style={{ fontSize: 13, color: '#166534' }}>
+                  Задачи привязаны к <strong>{withTasks}</strong> из {totalSystems} систем — план-график готов к проверке
+                </div>
+              </div>
+              <RunButton label="Перейти к графику (Этап 4) →" onClick={confirmStage3} running={false} />
+            </div>
+          )
+        })()}
+
+        {/* Этап 4 — чекпоинт: просмотр матрицы графика */}
+        {stage === 4 && stageStatus === 'checkpoint' && systems.length > 0 && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', flex: 'none' }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Сводный план-график обслуживания</div>
+              <div style={{ fontSize: 12, color: '#64748B' }}>проверьте и подтвердите</div>
+            </div>
+            <TZScheduleView systemsData={systems} buildings={buildings} />
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <RunButton label="Подтвердить →" onClick={confirmStage4} running={false} />
+              <button
+                onClick={confirmStage3}
+                style={{ padding: '11px 20px', borderRadius: 10, border: '1px solid #CBD5E1', background: '#FFFFFF', fontSize: 14, color: '#64748B', cursor: 'pointer', fontFamily: "'Golos Text',system-ui,sans-serif" }}
+              >
+                ← Назад
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Этап 4 — подтверждён */}
+        {stage === 4 && stageStatus === 'done' && systems.length > 0 && (
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', flex: 'none' }} />
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Задачи ЭК/ТО извлечены из графика</div>
-              <div style={{ fontSize: 12, color: '#64748B' }}>{scheduleTableCount} таблиц · 0 API-вызовов</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>График обслуживания подтверждён</div>
+              <div style={{ fontSize: 12, color: '#64748B' }}>{scheduleTableCount} таблиц</div>
             </div>
-            <TZSystemsView systemsData={systems} buildings={buildings} />
-            <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', marginBottom: 16 }}>
-                Сводный план-график обслуживания
+            <TZScheduleView systemsData={systems} buildings={buildings} />
+            <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#0369A1', marginBottom: 6 }}>
+                Этап 5 — Расчёт ресурсов
               </div>
-              <TZScheduleView systemsData={systems} buildings={buildings} />
+              <div style={{ fontSize: 13, color: '#0284C7', marginBottom: 12, lineHeight: 1.6 }}>
+                На основе плана-графика будет рассчитано: ФОТ по категориям специалистов, трудозатраты по зданиям и системам, потребность в расходных материалах.
+              </div>
+              <div style={{ fontSize: 12, color: '#7DD3FC', padding: '8px 12px', background: '#E0F2FE', borderRadius: 8, display: 'inline-block' }}>
+                Расчёт ресурсов — в разработке
+              </div>
             </div>
           </div>
         )}

@@ -117,6 +117,13 @@ export const useTZStore = create((set) => ({
     await idb.set('schedule_tables', tables)
   },
 
+  // Persist a confirmed stage (4+) so loadFromDB can restore it after reload.
+  // Only call for manual user confirmations, not for running/error states.
+  confirmStage: async (stageNum) => {
+    set({ stage: stageNum, stageStatus: 'done' })
+    await idb.set('confirmed_stage', stageNum)
+  },
+
   reset: async () => {
     set({
       fileName: null, fileSize: null, parseWarnings: [],
@@ -135,7 +142,7 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta, schedData, schedTables, html] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData, schedTables, html, confirmedStage] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
@@ -143,6 +150,7 @@ export const useTZStore = create((set) => ({
       idb.get('schedule_status'),
       idb.get('schedule_tables'),
       idb.get('html'),
+      idb.get('confirmed_stage'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
@@ -169,6 +177,13 @@ export const useTZStore = create((set) => ({
         patch.stageStatus = 'checkpoint'
       }
     }
+
+    // Restore manually confirmed stages (4+) when prerequisites are present
+    if (confirmedStage >= 4 && systems?.length && schedData?.status === 'merged') {
+      patch.stage = confirmedStage
+      patch.stageStatus = 'done'
+    }
+
     if (Object.keys(patch).length) set(patch)
   },
 }))
