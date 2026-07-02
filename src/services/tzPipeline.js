@@ -693,3 +693,258 @@ export async function runStage2(buildings, chunks, onProgress, {
   onProgress?.(100, buildings.length, buildings.length)
   return normalizeSystemsResult(results, buildings)
 }
+
+// ── STAGE 3: Schedule (ЭК/ТО) extraction ────────────────────────────────────
+// Reads the annual maintenance schedule tables from the TZ HTML.
+// All parsing is deterministic (no model calls).
+
+const SCHED_MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']
+const SCHED_CROSS  = /^[хxХ×✓+]$/i
+const SCHED_YEAR   = /\b(19|20)\d{2}\s*г\.?/
+
+const PERIODICITY_NORMS = [
+  [/ежесменно|каждую?\s*смен/i,                   'ежесменно'],
+  [/ежедневно|каждый\s*день/i,                   'ежедневно'],
+  [/еженедельно|1\s*раз\s*[/в]?\s*нед/i,         'еженедельно'],
+  [/ежемесячно|1\s*раз\s*[/в]?\s*мес/i,          'ежемесячно'],
+  [/ежеквартально|1\s*раз\s*[/в]?\s*кварт/i,     'ежеквартально'],
+  [/3\s*раза?\s*[/в]\s*год/i,                     '3р/год'],
+  [/2\s*раза?\s*[/в]?\s*год/i,                    '2р/год'],
+  [/1\s*раз\s*[/в]?\s*6\s*мес/i,                 '1р/6мес'],
+  [/1\s*раз\s*[/в]?\s*3[.,]5\s*г/i,              '1р/3.5года'],
+  [/1\s*раз\s*[/в]?\s*3\s*г/i,                   '1р/3года'],
+  [/1\s*раз\s*[/в]?\s*2\s*г/i,                   '1р/2года'],
+  [/1\s*раз\s*[/в]?\s*5\s*лет/i,                 '1р/5лет'],
+  [/1\s*раз\s*[/в]?\s*год|раз\s+в\s+год/i,       '1р/год'],
+]
+
+function normalizeSchedPeriodicity(raw) {
+  if (!raw) return 'не указано'
+  const s = raw.trim()
+  for (const [pat, norm] of PERIODICITY_NORMS) {
+    if (pat.test(s)) return norm
+  }
+  return s
+}
+
+const SCHED_SECTION_CATS = [
+  [/лифт|подъём|подъем|эскалатор/,                                     'elevator'],
+  [/медиа|мультимедиа|аудио.*видео|конференц.*сист/,                    'media'],
+  [/скс|лвс|сети\s+связи|авк|пассивн.*актив.*оборуд|активн.*оборуд/,    'lowcurrent'],
+  [/автомат|диспетч|\bbms\b|асуд|оздс/,                                 'bms'],
+  [/противодымн|дымоудален/,                                             'fire'],
+  [/охранн|скуд|видеонаблюд|итсо|доступ/,                              'security'],
+  [/пожарн|противопожарн|пожаротуш/,                                    'fire'],
+  [/холодоснабж/,                                                        'hvac'],
+  [/вентиляц|кондиц|фанкойл/,                                           'hvac'],
+  [/теплоснабж|отоплен/,                                                 'heating'],
+  [/водоснабж|водоотвед|канализ|дренаж/,                                'plumbing'],
+  [/электроснабж|электроосвещ|освещен/,                                  'electrical'],
+  [/строительн|кровл|фасад|конструктив|остеклен|ферм|балк|атриум|цокольн|лестниц|балкон|перил|газон|напольн|ступен|ограждени|двер|окон/, 'structural'],
+]
+
+function classifyScheduleSection(name) {
+  const n = name.toLowerCase()
+  for (const [pat, cat] of SCHED_SECTION_CATS) {
+    if (pat.test(n)) return cat
+  }
+  return null
+}
+
+const EK_KW = /проверк|осмотр|контрол|измер|испытан|тестир|освидетельств|мониторин|диагностик/
+const TO_KW = /очист|замен|промывк|протяжк|смазк|ремонт|дозаправк|уборк|регулировк|заправк/
+
+function classifySchedOpMode(text, tableMode) {
+  const t = text.toLowerCase()
+  const isEK = EK_KW.test(t)
+  const isTO = TO_KW.test(t)
+  if (isEK && !isTO) return { mode: 'EK', needsReview: false }
+  if (isTO && !isEK) return { mode: 'TO', needsReview: false }
+  if (!isEK && !isTO) return { mode: tableMode, needsReview: false }
+  return { mode: tableMode, needsReview: true }
+}
+
+function detectSchedBuilding(textBefore, row0col0) {
+  // Check header row first (most reliable), then last 200 chars of context
+  for (const src of [row0col0 ?? '', textBefore.slice(-200)]) {
+    const s = src.toLowerCase()
+    if (/гиперкуб/.test(s)) return 'hyp'
+    if (/усадьба/.test(s)) return 'usa'
+    if (/цдм/.test(s)) return 'nez'
+    // Check корп 2 BEFORE generic квартал/менделеева to avoid false km1
+    if (/корп[а-яё.]*\.?\s*2\b/.test(s)) return 'km2'
+    if (/квартал|менделеева|корп[а-яё.]*\.?\s*1\b/.test(s)) return 'km1'
+  }
+  return null
+}
+
+function detectSchedMode(textBefore) {
+  if (/эксплуатационного\s+контроля/i.test(textBefore)) return 'EK'
+  if (/технического\s+обслуживания/i.test(textBefore)) return 'TO'
+  return null
+}
+
+export function parseScheduleTables(html) {
+  const allTables = html.match(/<table[\s\S]*?<\/table>/g) || []
+  const results = []
+
+  for (let tIdx = 0; tIdx < allTables.length; tIdx++) {
+    const tbl = allTables[tIdx]
+    const rows = (tbl.match(/<tr[\s\S]*?<\/tr>/g) || [])
+      .map(r => (r.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/g) || [])
+        .map(c => c.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()))
+
+    if (rows.length < 10) continue
+
+    // Find header row containing 6+ month abbreviations
+    let monthRow = -1
+    const monthCols = {}
+    for (let ri = 0; ri < Math.min(3, rows.length); ri++) {
+      const joined = rows[ri].join(' ').toLowerCase()
+      if (SCHED_MONTHS.filter(m => joined.includes(m)).length >= 6) {
+        monthRow = ri
+        rows[ri].forEach((cell, ci) => {
+          const mi = SCHED_MONTHS.findIndex(m =>
+            cell.toLowerCase().replace(/\.$/, '').startsWith(m))
+          if (mi !== -1) monthCols[ci] = mi + 1
+        })
+        break
+      }
+    }
+    if (monthRow === -1 || Object.keys(monthCols).length < 10) continue
+
+    // Build context from HTML before table
+    const pos = html.indexOf(tbl)
+    const textBefore = html.slice(Math.max(0, pos - 900), pos)
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+
+    const buildingKey = detectSchedBuilding(textBefore, rows[0]?.[0] ?? '')
+    const mode = detectSchedMode(textBefore)
+    if (!buildingKey || !mode) continue
+
+    // Parse body rows
+    const sections = []
+    let curSection = null
+    let curEquip = null
+    let inputRowCount = 0
+
+    for (const row of rows.slice(monthRow + 1)) {
+      const nonEmpty = row.filter(c => c)
+      const c0 = row[0] ?? ''
+      const c1 = row[1] ?? ''
+      const c2 = row[2] ?? ''
+
+      // Month marks in this row
+      const months = Object.entries(monthCols)
+        .filter(([ci]) => SCHED_CROSS.test((row[Number(ci)] ?? '').trim()))
+        .map(([, m]) => Number(m)).sort((a, b) => a - b)
+      const yearMarks = Object.entries(monthCols)
+        .filter(([ci]) => SCHED_YEAR.test(row[Number(ci)] ?? ''))
+        .map(([ci, m]) => ({ month: Number(m), text: (row[Number(ci)] ?? '').trim() }))
+      const hasMonths = months.length > 0 || yearMarks.length > 0
+
+      if (hasMonths) inputRowCount++
+
+      // Section header: 1-2 non-empty cells, no months, non-integer first, ≤ 180 chars
+      if (!hasMonths && nonEmpty.length >= 1 && nonEmpty.length <= 2 &&
+          !/^\d+(\.\d+)?$/.test(nonEmpty[0]) && nonEmpty[nonEmpty.length - 1].length <= 180) {
+        const sName = nonEmpty[nonEmpty.length - 1]
+        if (sName.length < 3) continue
+        const cat = classifyScheduleSection(sName)
+        curSection = { name: sName, category: cat, needsReview: !cat,
+          equipment: [], maintenanceTasks: [], _inputRows: 0 }
+        sections.push(curSection)
+        curEquip = null
+        continue
+      }
+
+      // Equipment header: 2 non-empty cells, first is integer
+      if (!hasMonths && nonEmpty.length === 2 && /^\d+$/.test(nonEmpty[0]) && curSection) {
+        curEquip = { num: nonEmpty[0], name: nonEmpty[1], maintenanceTasks: [] }
+        curSection.equipment.push(curEquip)
+        continue
+      }
+
+      // Operation: has months
+      if (hasMonths && curSection) {
+        curSection._inputRows++
+        const opText = c1 || c0
+        const { mode: opMode, needsReview } = classifySchedOpMode(opText, mode)
+        const task = {
+          opNum: c0.trim(),
+          mode: opMode,
+          operation: opText,
+          periodicity: normalizeSchedPeriodicity(c2),
+          months,
+          yearMarks,
+          source: 'schedule',
+          needsReview,
+        }
+        ;(curEquip ?? curSection).maintenanceTasks.push(task)
+      }
+    }
+
+    results.push({ buildingKey, mode, tableIdx: tIdx, sections, inputRowCount })
+  }
+
+  return results
+}
+
+export function runStage3(stage2Results, buildings, scheduleTables) {
+  return stage2Results.map(entry => {
+    const building = buildings.find(b => b.id === entry.buildingId)
+    if (!building) return entry
+
+    const bKey = getBuildingApp2Key(building)
+    const bSched = scheduleTables.filter(t => t.buildingKey === bKey)
+    if (!bSched.length) return { ...entry }
+
+    // Clone systems, initialise maintenanceTasks
+    const systems = entry.systems.map(s => ({ ...s, maintenanceTasks: s.maintenanceTasks ?? [] }))
+    let createdCount = 0
+
+    for (const table of bSched) {
+      for (const section of table.sections) {
+        if (!section.category) {
+          console.log(`[stage3] ${bKey} ${table.mode}: секция без категории — "${section.name}"`)
+          continue
+        }
+
+        let sys = systems.find(s => s.category === section.category)
+        if (!sys) {
+          const newId = `${entry.buildingId}-${section.category}-s3`
+          sys = {
+            id: newId,
+            category: section.category,
+            name: section.name,
+            scope: 'building',
+            subBuildingId: null,
+            needsReview: true,
+            source: 'schedule',
+            basisNorms: [],
+            notes: null,
+            equipment: [],
+            maintenanceTasks: [],
+          }
+          systems.push(sys)
+          createdCount++
+          console.log(`[stage3] ${bKey}: создана система "${section.name}" [${section.category}] из графика`)
+        }
+
+        if (section.category === 'elevator' && !sys.maintenanceScope) {
+          sys.maintenanceScope = 'operation_only'
+        }
+
+        // Flatten section tasks (directly on section + under equipment)
+        const tasks = [
+          ...section.maintenanceTasks,
+          ...section.equipment.flatMap(eq =>
+            eq.maintenanceTasks.map(t => ({ ...t, scheduleEquipment: eq.name }))),
+        ]
+        sys.maintenanceTasks.push(...tasks)
+      }
+    }
+
+    return { ...entry, systems }
+  })
+}
