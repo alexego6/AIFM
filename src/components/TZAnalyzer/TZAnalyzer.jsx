@@ -109,7 +109,7 @@ export default function TZAnalyzer() {
     fileName, fileSize, parseWarnings,
     chunks, stage, stageStatus, stageError,
     buildings, systems,
-    scheduleStatus, scheduleTableCount, scheduleTables,
+    scheduleStatus, scheduleTableCount, scheduleTables, htmlContent,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
     setHtmlContent, setScheduleStatus, setScheduleTables,
     reset, loadFromDB,
@@ -195,7 +195,7 @@ export default function TZAnalyzer() {
     try {
       const result = await runStage2(buildings, chunks, (pct, batch, total) => {
         setStage2Progress({ pct, batch, total })
-      })
+      }, { htmlContent })
       await setSystems(result)
       setStage2Progress(null)
       setStage(2, 'checkpoint')
