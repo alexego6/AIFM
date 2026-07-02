@@ -152,6 +152,16 @@ ${SCHEMA_EXAMPLE}
 КОНТЕКСТ (начало документа ТЗ):
 ${context}`
 
+// ── Sub-building area parser ─────────────────────────────────────────────────
+// Extracts floor area (кв.м) from sub_building name strings like
+// "АХК 1 (3 эт., 2123,2 кв.м, кад. №...)" → 2123.2
+function parseSubBuildingArea(name) {
+  const m = name.match(/(\d[\d\s ]*(?:[.,]\d+)?)\s*кв\.?\s*м/i)
+  if (!m) return null
+  const val = parseFloat(m[1].replace(/[\s ]/g, '').replace(',', '.'))
+  return isFinite(val) && val > 0 ? Math.round(val * 10) / 10 : null
+}
+
 // ── shared helpers ────────────────────────────────────────────────────────────
 function splitChunk(chunk, maxSize) {
   if (chunk.length <= maxSize) return [chunk]
@@ -234,21 +244,43 @@ export async function runStage1(chunks, onProgress) {
 
   onProgress?.(100, totalSteps, totalSteps)
 
-  return buildings.map((b, i) => ({
-    id: `b${i + 1}`,
-    name: b.name ?? 'Объект без названия',
-    address: b.address ?? null,
-    floors: typeof b.floors === 'number' ? b.floors : null,
-    areaSqm: typeof b.areaSqm === 'number' ? b.areaSqm
-             : typeof b.area_m2 === 'number' ? b.area_m2 : null,
-    territoryAreaSqm: typeof b.territoryAreaSqm === 'number' ? b.territoryAreaSqm : null,
-    year_built: typeof b.year_built === 'number' ? b.year_built : null,
-    purpose: b.purpose ?? null,
-    needsReview: !!b.needsReview,
-    sub_buildings: Array.isArray(b.sub_buildings)
+  return buildings.map((b, i) => {
+    const sub_buildings = Array.isArray(b.sub_buildings)
       ? b.sub_buildings.filter(s => typeof s === 'string' && s.trim())
-      : [],
-  }))
+      : []
+
+    // For complexes with ≥4 sub-buildings, compute areaSqm by parsing individual
+    // structure areas from the names extracted by the AI (provenance: tz).
+    // This avoids the model mis-summing (e.g. Усадьба: model returned ~6 089 instead of ~8 500).
+    // Threshold ≥4 prevents mistakenly summing ancillary items like "КПП (4 кв.м)".
+    let areaSqm = typeof b.areaSqm === 'number' ? b.areaSqm
+                  : typeof b.area_m2 === 'number' ? b.area_m2 : null
+    let areaSqmComponents = null
+
+    if (sub_buildings.length >= 4) {
+      const parsed = sub_buildings
+        .map(s => ({ name: s, area: parseSubBuildingArea(s) }))
+        .filter(x => x.area !== null)
+      if (parsed.length >= 3) {
+        areaSqm = Math.round(parsed.reduce((s, x) => s + x.area, 0) * 10) / 10
+        areaSqmComponents = parsed
+      }
+    }
+
+    return {
+      id: `b${i + 1}`,
+      name: b.name ?? 'Объект без названия',
+      address: b.address ?? null,
+      floors: typeof b.floors === 'number' ? b.floors : null,
+      areaSqm,
+      areaSqmComponents,
+      territoryAreaSqm: typeof b.territoryAreaSqm === 'number' ? b.territoryAreaSqm : null,
+      year_built: typeof b.year_built === 'number' ? b.year_built : null,
+      purpose: b.purpose ?? null,
+      needsReview: !!b.needsReview,
+      sub_buildings,
+    }
+  })
 }
 
 // ── Stage 2: инженерные системы ───────────────────────────────────────────────
