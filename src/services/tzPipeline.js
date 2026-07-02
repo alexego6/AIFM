@@ -789,6 +789,24 @@ function detectSchedMode(textBefore) {
   return null
 }
 
+// Lightweight check: count tables that look like ЭК/ТО schedule tables.
+// Conservative — only returns found:true when ≥2 qualifying tables exist.
+export function detectSchedule(html) {
+  const allTables = html.match(/<table[\s\S]*?<\/table>/g) || []
+  let count = 0
+  for (const tbl of allTables) {
+    const rows = (tbl.match(/<tr[\s\S]*?<\/tr>/g) || [])
+      .map(r => (r.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/g) || [])
+        .map(c => c.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()))
+    if (rows.length < 10) continue
+    for (let ri = 0; ri < Math.min(3, rows.length); ri++) {
+      const joined = rows[ri].join(' ').toLowerCase()
+      if (SCHED_MONTHS.filter(m => joined.includes(m)).length >= 6) { count++; break }
+    }
+  }
+  return { found: count >= 2, tableCount: count }
+}
+
 export function parseScheduleTables(html) {
   const allTables = html.match(/<table[\s\S]*?<\/table>/g) || []
   const results = []

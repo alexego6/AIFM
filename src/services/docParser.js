@@ -5,6 +5,17 @@ import * as XLSX from 'xlsx'
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 
 /**
+ * Для DOCX: возвращает полный HTML через mammoth (нужен для parseScheduleTables).
+ * Для других форматов возвращает null.
+ */
+export async function parseDocxHtml(file) {
+  if (!file.name.toLowerCase().endsWith('.docx')) return null
+  const ab = await file.arrayBuffer()
+  const result = await mammoth.convertToHtml({ arrayBuffer: ab })
+  return result.value || null
+}
+
+/**
  * Парсит DOCX / PDF / TXT / XLSX / XLS и возвращает { text: string, warnings: string[] }
  */
 export async function parseFile(file) {

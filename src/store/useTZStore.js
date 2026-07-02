@@ -54,12 +54,20 @@ export const useTZStore = create((set) => ({
 
   // Прогресс пайплайна
   stage: 0,            // 0-6, текущий выполненный этап
-  stageStatus: 'idle', // 'idle' | 'running' | 'done' | 'error' | 'checkpoint'
+  stageStatus: 'idle', // 'idle' | 'running' | 'done' | 'error' | 'checkpoint' | 'no_schedule'
   stageError: null,
 
   // Результаты этапов
   buildings: [],       // Building[] — Этап 1
-  systems: [],         // { buildingId, systems: System[] }[] — Этап 2
+  systems: [],         // { buildingId, systems: System[] }[] — Этап 2+3
+
+  // Этап 3: статус графика ЭК/ТО
+  // Хранится в IDB чтобы loadFromDB мог восстановить stage=3 после reload
+  scheduleStatus: 'unknown',  // 'unknown' | 'found' | 'not_found' | 'merged'
+  scheduleTableCount: 0,
+
+  // HTML документа — только в памяти, нужен для parseScheduleTables в текущей сессии
+  htmlContent: null,
 
   // ── действия ─────────────────────────────────────────────────────────────
   setFile: async (name, size) => {
@@ -91,11 +99,19 @@ export const useTZStore = create((set) => ({
     await idb.set('systems', systems)
   },
 
+  setHtmlContent: (html) => set({ htmlContent: html }),
+
+  setScheduleStatus: async (status, tableCount = 0) => {
+    set({ scheduleStatus: status, scheduleTableCount: tableCount })
+    await idb.set('schedule_status', { status, tableCount })
+  },
+
   reset: async () => {
     set({
       fileName: null, fileSize: null, parseWarnings: [],
       chunks: [], stage: 0, stageStatus: 'idle', stageError: null,
       buildings: [], systems: [],
+      scheduleStatus: 'unknown', scheduleTableCount: 0, htmlContent: null,
     })
     await idb.clear()
   },
@@ -107,17 +123,34 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
       idb.get('meta'),
+      idb.get('schedule_status'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
     if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = 0; patch.stageStatus = 'done' }
     if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'done' }
-    if (systems?.length)   { patch.systems   = systems;   patch.stage = 2; patch.stageStatus = 'checkpoint' }
+    if (systems?.length) {
+      patch.systems = systems
+      if (schedData?.status === 'merged') {
+        // Stage 3 was completed — restore at stage 3 done
+        patch.stage = 3
+        patch.stageStatus = 'done'
+        patch.scheduleStatus = 'merged'
+        patch.scheduleTableCount = schedData.tableCount ?? 0
+      } else {
+        patch.stage = 2
+        patch.stageStatus = 'checkpoint'
+        if (schedData) {
+          patch.scheduleStatus = schedData.status
+          patch.scheduleTableCount = schedData.tableCount ?? 0
+        }
+      }
+    }
     if (Object.keys(patch).length) set(patch)
   },
 }))

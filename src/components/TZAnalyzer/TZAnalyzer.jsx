@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTZStore } from '../../store/useTZStore'
-import { parseFile } from '../../services/docParser'
+import { parseFile, parseDocxHtml } from '../../services/docParser'
 import { chunkByHeadings } from '../../services/chunkText'
-import { runStage1, runStage2 } from '../../services/tzPipeline'
+import { runStage1, runStage2, detectSchedule, parseScheduleTables, runStage3 } from '../../services/tzPipeline'
 import TZUploadZone from './TZUploadZone'
 import TZBuildingTabs from './TZBuildingTabs'
 import TZSystemsView from './TZSystemsView'
@@ -109,7 +109,9 @@ export default function TZAnalyzer() {
     fileName, fileSize, parseWarnings,
     chunks, stage, stageStatus, stageError,
     buildings, systems,
+    scheduleStatus, scheduleTableCount, htmlContent,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
+    setHtmlContent, setScheduleStatus,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
@@ -117,6 +119,7 @@ export default function TZAnalyzer() {
   const [parseError, setParseError] = useState(null)
   const [stage1Progress, setStage1Progress] = useState(null) // { pct, batch, total }
   const [stage2Progress, setStage2Progress] = useState(null) // { pct, batch, total }
+  const [stage3Error, setStage3Error] = useState(null)
 
   useEffect(() => { loadFromDB() }, [loadFromDB])
 
@@ -133,11 +136,24 @@ export default function TZAnalyzer() {
     setParseError(null)
     setStage(0, 'running')
     try {
-      const { text, warnings } = await parseFile(file)
+      // Parse text and HTML concurrently (HTML needed for Stage 3 schedule detection)
+      const [{ text, warnings }, html] = await Promise.all([
+        parseFile(file),
+        parseDocxHtml(file),
+      ])
       const ch = chunkByHeadings(text)
       await setChunks(ch)
       setParseWarnings(warnings)
       setFile(file.name, file.size)
+
+      setHtmlContent(html)
+      if (html) {
+        const { found, tableCount } = detectSchedule(html)
+        await setScheduleStatus(found ? 'found' : 'not_found', tableCount)
+      } else {
+        await setScheduleStatus('not_found', 0)
+      }
+
       setStage(0, 'done')
     } catch (err) {
       setParseError(err.message)
@@ -183,8 +199,25 @@ export default function TZAnalyzer() {
     }
   }
 
-  function confirmStage2() {
-    setStage(2, 'done')
+  async function confirmStage2() {
+    // If schedule was detected and we have the HTML in memory → auto-run Stage 3
+    if (htmlContent && scheduleStatus === 'found') {
+      setStage3Error(null)
+      setStage(3, 'running')
+      try {
+        const scheduleTables = parseScheduleTables(htmlContent)
+        const enriched = runStage3(systems, buildings, scheduleTables)
+        await setSystems(enriched)
+        await setScheduleStatus('merged', scheduleTableCount)
+        setStage(3, 'done')
+      } catch (err) {
+        setStage3Error(err.message)
+        setStage(3, 'error', err.message)
+      }
+    } else {
+      // No schedule in doc (or HTML not available in this session) → stub
+      setStage(3, 'no_schedule')
+    }
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -376,8 +409,27 @@ export default function TZAnalyzer() {
               </div>
             </div>
             <TZSystemsView systemsData={systems} buildings={buildings} />
+
+            {/* Schedule detector badge */}
+            {scheduleStatus === 'found' && (
+              <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#166534' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+                График ЭК/ТО найден в документе ({scheduleTableCount} табл.) — при подтверждении задачи будут извлечены автоматически (0 API-вызовов)
+              </div>
+            )}
+            {scheduleStatus === 'not_found' && (
+              <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#92400E' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                График ЭК/ТО в документе не найден — после подтверждения можно загрузить отдельный файл
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <RunButton label="Подтвердить →" onClick={confirmStage2} running={false} />
+              <RunButton
+                label={scheduleStatus === 'found' ? 'Подтвердить → извлечь задачи' : 'Подтвердить →'}
+                onClick={confirmStage2}
+                running={false}
+              />
               <button
                 onClick={handleStage2}
                 style={{ padding: '11px 20px', borderRadius: 10, border: '1px solid #CBD5E1', background: '#FFFFFF', fontSize: 14, color: '#64748B', cursor: 'pointer', fontFamily: "'Golos Text',system-ui,sans-serif" }}
@@ -388,7 +440,7 @@ export default function TZAnalyzer() {
           </div>
         )}
 
-        {/* Этап 2 — подтверждён */}
+        {/* Этап 2 — подтверждён (промежуточное состояние, если Stage 3 не запустился) */}
         {stage === 2 && stageStatus === 'done' && systems.length > 0 && (
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -396,8 +448,66 @@ export default function TZAnalyzer() {
               <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Инженерные системы подтверждены</div>
             </div>
             <TZSystemsView systemsData={systems} buildings={buildings} />
+          </div>
+        )}
+
+        {/* Этап 3 — выполняется (детерминированный парсинг, секунды) */}
+        {stage === 3 && stageStatus === 'running' && (
+          <div style={{ background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 14, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" strokeWidth="2.2" style={{ animation: 'spin 1s linear infinite', flex: 'none' }}>
+                <path d="M21 12a9 9 0 1 1-6-8.5"/>
+              </svg>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#1E40AF' }}>Извлекаю задачи ЭК/ТО…</div>
+                <div style={{ fontSize: 12, color: '#3730A3', marginTop: 2 }}>Разбираю таблицы графика — 0 API-вызовов</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Этап 3 — ошибка */}
+        {stage === 3 && stageStatus === 'error' && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 14, padding: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#B91C1C', marginBottom: 6 }}>Ошибка при извлечении задач</div>
+            <div style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{stage3Error}</div>
+          </div>
+        )}
+
+        {/* Этап 3 — задачи извлечены */}
+        {stage === 3 && stageStatus === 'done' && systems.length > 0 && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', flex: 'none' }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Задачи ЭК/ТО извлечены из графика</div>
+              <div style={{ fontSize: 12, color: '#64748B' }}>{scheduleTableCount} таблиц · 0 API-вызовов</div>
+            </div>
+            <TZSystemsView systemsData={systems} buildings={buildings} />
             <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: '#166534' }}>
-              Этап 3 (Задачи технического обслуживания) — будет доступен в следующей версии.
+              Этап 4 (сводный календарь обслуживания) — в разработке.
+            </div>
+          </div>
+        )}
+
+        {/* Этап 3 — стаб: график не найден */}
+        {stage === 3 && stageStatus === 'no_schedule' && (
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', flex: 'none' }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>График ЭК/ТО не найден в ТЗ</div>
+            </div>
+            <TZSystemsView systemsData={systems} buildings={buildings} />
+            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#92400E', marginBottom: 6 }}>
+                Есть отдельный файл с графиком ТО/ЭК?
+              </div>
+              <div style={{ fontSize: 12, color: '#B45309', marginBottom: 12, lineHeight: 1.6 }}>
+                Если заказчик предоставил отдельный Excel/Word с графиком — загрузите его.
+                Периодичность и месяцы будут извлечены автоматически (0 API-вызовов).
+              </div>
+              <div style={{ fontSize: 12, color: '#D97706', padding: '8px 12px', background: '#FEF3C7', borderRadius: 8, display: 'inline-block' }}>
+                Загрузка отдельного файла графика — в разработке
+              </div>
             </div>
           </div>
         )}
