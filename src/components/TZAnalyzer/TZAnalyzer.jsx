@@ -4,11 +4,13 @@ import { parseFile, parseDocxHtml } from '../../services/docParser'
 import { chunkByHeadings } from '../../services/chunkText'
 import { runStage1, runStage2, detectSchedule, parseScheduleTables, runStage3 } from '../../services/tzPipeline'
 import { calcAllStaffing } from '../../services/staffingHeuristic'
+import { calcAllResources } from '../../services/resourcesHeuristic'
 import TZUploadZone from './TZUploadZone'
 import TZBuildingTabs from './TZBuildingTabs'
 import TZSystemsView from './TZSystemsView'
 import TZScheduleView from './TZScheduleView'
 import TZStaffingView from './TZStaffingView'
+import TZResourcesView from './TZResourcesView'
 
 // ── Пайплайн-степпер ──────────────────────────────────────────────────────────
 const STAGES = [
@@ -111,10 +113,10 @@ export default function TZAnalyzer() {
   const {
     fileName, fileSize, parseWarnings,
     chunks, stage, stageStatus, stageError,
-    buildings, systems, staffingPlan,
+    buildings, systems, staffingPlan, resourcesPlan,
     scheduleStatus, scheduleTableCount, scheduleTables, htmlContent,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
-    setHtmlContent, setScheduleStatus, setScheduleTables, confirmStage, setStaffingPlan,
+    setHtmlContent, setScheduleStatus, setScheduleTables, confirmStage, setStaffingPlan, setResourcesPlan,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
@@ -238,10 +240,12 @@ export default function TZAnalyzer() {
     await confirmStage(4)
   }
 
-  // Stage 5: compute staffing deterministically (0 API) and show checkpoint
+  // Stage 5: compute staffing + resources deterministically (0 API) and show checkpoint
   function startStage5() {
-    const plans = calcAllStaffing(buildings)
-    setStaffingPlan(plans)
+    const staffing  = calcAllStaffing(buildings)
+    const resources = calcAllResources(buildings, systems)
+    setStaffingPlan(staffing)
+    setResourcesPlan(resources)
     setStage(5, 'checkpoint')
   }
 
@@ -249,6 +253,14 @@ export default function TZAnalyzer() {
   async function confirmStage5() {
     await confirmStage(5)
   }
+
+  // Пересчитать если ресурсы пустые или в устаревшей схеме (zip → spareParts)
+  useEffect(() => {
+    if (stage === 5 && stageStatus === 'done' && buildings.length && systems.length) {
+      const stale = !resourcesPlan.length || !resourcesPlan[0]?.spareParts
+      if (stale) setResourcesPlan(calcAllResources(buildings, systems))
+    }
+  }, [stage, stageStatus, buildings.length, systems.length, resourcesPlan.length])
 
   // ── Render ──────────────────────────────────────────────────────────────────
   if (!chunks.length && stageStatus !== 'running') {
@@ -562,15 +574,21 @@ export default function TZAnalyzer() {
           </div>
         )}
 
-        {/* Этап 5 — чекпойнт: показываем план штата, ждём подтверждения */}
+        {/* Этап 5 — чекпойнт: показываем план штата + ресурсы, ждём подтверждения */}
         {stage === 5 && stageStatus === 'checkpoint' && staffingPlan.length > 0 && (
-          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#1D4ED8', flex: 'none' }} />
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Этап 5 — Штат специалистов</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Этап 5 — Ресурсы</div>
               <div style={{ fontSize: 12, color: '#64748B' }}>детерминировано · 0 API · провенанс: эталон + ТЗ</div>
             </div>
             <TZStaffingView staffingPlans={staffingPlan} />
+            <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 12 }}>
+                ЗИП · Расходники · Инструмент
+              </div>
+              <TZResourcesView resourcesPlans={resourcesPlan} />
+            </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <RunButton label="Подтвердить →" onClick={confirmStage5} running={false} />
               <button
@@ -583,12 +601,27 @@ export default function TZAnalyzer() {
 
         {/* Этап 5 — подтверждён */}
         {stage === 5 && stageStatus === 'done' && staffingPlan.length > 0 && (
-          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', flex: 'none' }} />
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Штат специалистов подтверждён</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0F172A' }}>Ресурсы подтверждены</div>
+              <button
+                onClick={() => setStage(4, 'done')}
+                style={{
+                  marginLeft: 'auto', fontSize: 12, color: '#64748B',
+                  background: 'none', border: '1px solid #E2E8F0',
+                  borderRadius: 8, padding: '4px 12px', cursor: 'pointer',
+                  fontFamily: "'Golos Text',system-ui,sans-serif",
+                }}
+              >← Пересчитать</button>
             </div>
             <TZStaffingView staffingPlans={staffingPlan} />
+            <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 12 }}>
+                ЗИП · Расходники · Инструмент
+              </div>
+              <TZResourcesView resourcesPlans={resourcesPlan} />
+            </div>
             <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '14px 16px' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#0369A1', marginBottom: 4 }}>Этап 6 — Интеграция</div>
               <div style={{ fontSize: 12, color: '#7DD3FC', padding: '6px 10px', background: '#E0F2FE', borderRadius: 8, display: 'inline-block' }}>

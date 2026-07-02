@@ -72,8 +72,9 @@ export const useTZStore = create((set) => ({
   // HTML документа — только в памяти (не нужен после парсинга таблиц)
   htmlContent: null,
 
-  // Этап 5: план штата (массив по зданиям, детерминированный)
+  // Этап 5: план штата и ресурсов (массив по зданиям, детерминированный)
   staffingPlan: [],      // StaffingPlanEntry[] — persisted in IDB
+  resourcesPlan: [],     // ResourcesPlanEntry[] — persisted in IDB
 
   // ── действия ─────────────────────────────────────────────────────────────
   setFile: async (name, size) => {
@@ -125,6 +126,11 @@ export const useTZStore = create((set) => ({
     await idb.set('staffing_plan', plans)
   },
 
+  setResourcesPlan: async (plans) => {
+    set({ resourcesPlan: plans })
+    await idb.set('resources_plan', plans)
+  },
+
   // Persist a confirmed stage (4+) so loadFromDB can restore it after reload.
   // Only call for manual user confirmations, not for running/error states.
   confirmStage: async (stageNum) => {
@@ -140,6 +146,7 @@ export const useTZStore = create((set) => ({
       scheduleStatus: 'unknown', scheduleTableCount: 0,
       scheduleTables: null, htmlContent: null,
       staffingPlan: [],
+      resourcesPlan: [],
     })
     await idb.clear()
   },
@@ -151,7 +158,7 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta, schedData, schedTables, html, confirmedStage, staffingPlan] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData, schedTables, html, confirmedStage, staffingPlan, resourcesPlan] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
@@ -161,6 +168,7 @@ export const useTZStore = create((set) => ({
       idb.get('html'),
       idb.get('confirmed_stage'),
       idb.get('staffing_plan'),
+      idb.get('resources_plan'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
@@ -193,9 +201,8 @@ export const useTZStore = create((set) => ({
       patch.stage = confirmedStage
       patch.stageStatus = 'done'
     }
-    if (staffingPlan?.length) {
-      patch.staffingPlan = staffingPlan
-    }
+    if (staffingPlan?.length)  { patch.staffingPlan  = staffingPlan }
+    if (resourcesPlan?.length) { patch.resourcesPlan = resourcesPlan }
 
     if (Object.keys(patch).length) set(patch)
   },
