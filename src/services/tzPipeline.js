@@ -43,9 +43,11 @@ const SCHEMA_EXAMPLE = `[
     "name": "Офисный центр «Квартал Менделеева» корпус 1",
     "address": "г. Москва, ул. Нобеля, д. 7",
     "floors": 4,
-    "area_m2": 8958.5,
+    "areaSqm": 8958.5,
+    "territoryAreaSqm": null,
     "year_built": 2015,
     "purpose": "административно-офисное здание",
+    "needsReview": false,
     "sub_buildings": []
   },
   {
@@ -53,9 +55,11 @@ const SCHEMA_EXAMPLE = `[
     "name": "Усадьба «Ромашово»",
     "address": "МО, Одинцовский р-н",
     "floors": null,
-    "area_m2": 12500.0,
+    "areaSqm": 2356.0,
+    "territoryAreaSqm": 129012.0,
     "year_built": 2003,
     "purpose": "загородный комплекс",
+    "needsReview": true,
     "sub_buildings": [
       "Административно-хозяйственный корпус №1",
       "Административно-хозяйственный корпус №2",
@@ -92,9 +96,15 @@ const EXTRACT_PROMPT = (text) => `Ты — эксперт по техничес�
 - name: официальное наименование (комплекса или отдельного здания)
 - address: адрес или null
 - floors: число этажей или null
-- area_m2: суммарная площадь комплекса / здания или null
+- areaSqm: площадь ПОЛ здания/строений (м²) — только пол, НЕ территория/участок.
+  Для отдельного здания: из фразы «общей площадью … кв.м».
+  Для комплекса с перечнем строений: СУММА площадей строений.
+  null если площадь пола в тексте не найдена.
+- territoryAreaSqm: площадь территории/земельного участка (м²) если явно упомянута
+  (пример: «земельный участок … общей площадью 129012»). null для обычных зданий.
 - year_built: год или null
 - purpose: назначение (одна фраза)
+- needsReview: true если areaSqm не найдена в тексте или объект требует ручной проверки
 - sub_buildings: [] или список названий составных строений
 
 Если в этом фрагменте нет новых самостоятельных объектов — верни [].
@@ -125,7 +135,14 @@ ${JSON.stringify(candidates, null, 2)}
    ИСКЛЮЧЕНИЕ: корпус 1 и корпус 2 одного проекта с РАЗНЫМИ адресами (разные номера дома) —
    оставь их как ОТДЕЛЬНЫЕ объекты верхнего уровня, НЕ объединяй в один с sub_buildings.
 
-3. ДОПОЛНИ пустые поля (address, floors, area_m2, year_built, sub_buildings) из контекста ниже.
+3. ДОПОЛНИ пустые поля (address, floors, areaSqm, territoryAreaSqm, year_built, sub_buildings) из контекста ниже.
+
+КРИТИЧНО для комплексов (Усадьба, кампус, бизнес-парк и т.п.):
+- areaSqm = СУММА площадей строений из перечня (АХК, коттеджи, баня и т.д.).
+  НИКОГДА не ставить в areaSqm площадь земельного участка/территории.
+- territoryAreaSqm = площадь участка (пример: «земельный участок … 129012 кв.м»).
+- needsReview = true для комплексов с разрозненными строениями (проверить рассредоточенность).
+- Если areaSqm не найдена ни в одном фрагменте — оставить null и needsReview: true.
 
 4. Переназначь id по порядку: b1, b2, b3…
 
@@ -222,9 +239,12 @@ export async function runStage1(chunks, onProgress) {
     name: b.name ?? 'Объект без названия',
     address: b.address ?? null,
     floors: typeof b.floors === 'number' ? b.floors : null,
-    area_m2: typeof b.area_m2 === 'number' ? b.area_m2 : null,
+    areaSqm: typeof b.areaSqm === 'number' ? b.areaSqm
+             : typeof b.area_m2 === 'number' ? b.area_m2 : null,
+    territoryAreaSqm: typeof b.territoryAreaSqm === 'number' ? b.territoryAreaSqm : null,
     year_built: typeof b.year_built === 'number' ? b.year_built : null,
     purpose: b.purpose ?? null,
+    needsReview: !!b.needsReview,
     sub_buildings: Array.isArray(b.sub_buildings)
       ? b.sub_buildings.filter(s => typeof s === 'string' && s.trim())
       : [],
