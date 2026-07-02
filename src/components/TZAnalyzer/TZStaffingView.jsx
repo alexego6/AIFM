@@ -1,6 +1,84 @@
 import { useState } from 'react'
 import { calcSummary } from '../../services/staffingHeuristic'
 
+const DEFAULT_RATES = {
+  engineer:   120_000,  // ₽/мес · инженер по эксплуатации
+  technician:  75_000,  // ₽/мес · техник-универсал
+  watchman:    65_000,  // ₽/мес · суточник (за 1 ставку)
+}
+
+const fmt = (n) => n.toLocaleString('ru-RU', { maximumFractionDigits: 0 })
+
+function calcFOT(plan, rates) {
+  if (plan.totalStavki == null) return null
+  const monthly = plan.numEngineers * rates.engineer
+    + plan.numTechnicians * rates.technician
+    + plan.watchStavki * rates.watchman
+  return { monthly, annual: monthly * 12 }
+}
+
+function SalaryRatesEditor({ rates, onChange }) {
+  const fields = [
+    { key: 'engineer',   label: 'Инженер по эксплуатации' },
+    { key: 'technician', label: 'Техник-универсал' },
+    { key: 'watchman',   label: 'Суточник (за 1 ставку)' },
+  ]
+  return (
+    <div style={{
+      background: '#FAFAFA', border: '1px solid #E2E8F0',
+      borderRadius: 10, padding: '12px 14px',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10 }}>
+        Ставки ФОТ, ₽/мес · МСК дефолты · провенанс user
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {fields.map(f => (
+          <div key={f.key} style={{ flex: '1 1 160px' }}>
+            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>{f.label}</div>
+            <input
+              type="number"
+              value={rates[f.key]}
+              onChange={e => onChange({ ...rates, [f.key]: Number(e.target.value) || 0 })}
+              style={{
+                width: '100%', padding: '6px 10px', borderRadius: 8,
+                border: '1px solid #E2E8F0', fontSize: 13, fontWeight: 500,
+                color: '#0F172A', background: '#FFFFFF',
+                fontFamily: "'Golos Text',system-ui,sans-serif",
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FOTCard({ plan, rates }) {
+  const fot = calcFOT(plan, rates)
+  if (!fot) return null
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
+    }}>
+      <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 14px' }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#059669' }}>{fmt(fot.monthly)} ₽</div>
+        <div style={{ fontSize: 12, color: '#065F46', marginTop: 2 }}>ФОТ в месяц (gross)</div>
+        <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>
+          + страховые ~30%: {fmt(Math.round(fot.monthly * 1.3))} ₽
+        </div>
+      </div>
+      <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 14px' }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#059669' }}>{fmt(fot.annual)} ₽</div>
+        <div style={{ fontSize: 12, color: '#065F46', marginTop: 2 }}>ФОТ в год (gross)</div>
+        <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>
+          + страховые ~30%: {fmt(Math.round(fot.annual * 1.3))} ₽
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function buildingShortName(name) {
   if (!name) return '—'
   if (/гиперкуб/i.test(name)) return 'Гиперкуб'
@@ -137,14 +215,20 @@ function SLABlock({ constraints }) {
   )
 }
 
-function SummaryBlock({ plans }) {
+function SummaryBlock({ plans, rates }) {
   const s = calcSummary(plans)
   if (!s) return null
+
+  const totalFOTMonthly = plans
+    .map(p => calcFOT(p, rates))
+    .filter(Boolean)
+    .reduce((acc, f) => acc + f.monthly, 0)
+  const totalFOTAnnual = totalFOTMonthly * 12
 
   const rows = [
     { label: 'Инженер по эксплуатации', value: s.engineers, note: `${s.buildingCount} объект(ов) × 1` },
     { label: 'Техник-универсал', value: s.technicians, note: 'сумма по объектам' },
-    { label: 'Дежурный (суточник)', value: s.watchStavki, note: 'ставок — режим сутки/трое' },
+    { label: 'Суточник', value: s.watchStavki, note: 'ставок (режим сутки/трое)' },
   ]
 
   return (
@@ -152,10 +236,12 @@ function SummaryBlock({ plans }) {
       <div style={{ fontSize: 12, fontWeight: 600, color: '#0369A1', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 12 }}>
         Итого по всем объектам ({s.buildingCount})
       </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+
+      {/* Staff counts */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
         {rows.map(r => (
           <div key={r.label} style={{
-            flex: '1 1 140px', background: '#FFFFFF', borderRadius: 10,
+            flex: '1 1 130px', background: '#FFFFFF', borderRadius: 10,
             border: '1px solid #BAE6FD', padding: '10px 14px',
           }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: '#0369A1' }}>{r.value}</div>
@@ -164,14 +250,35 @@ function SummaryBlock({ plans }) {
           </div>
         ))}
         <div style={{
-          flex: '1 1 140px', background: 'linear-gradient(135deg,#1D4ED8,#7C3AED)',
+          flex: '1 1 130px', background: 'linear-gradient(135deg,#1D4ED8,#7C3AED)',
           borderRadius: 10, padding: '10px 14px',
         }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#FFFFFF' }}>{s.totalStavki}</div>
-          <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,.85)', marginTop: 2 }}>Итого ставок на объектах</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,.85)', marginTop: 2 }}>Итого ставок</div>
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,.6)', marginTop: 1 }}>без службы за скобками</div>
         </div>
       </div>
+
+      {/* Total FOT */}
+      {totalFOTMonthly > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 14px' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#059669' }}>{fmt(totalFOTMonthly)} ₽</div>
+            <div style={{ fontSize: 12, color: '#065F46', marginTop: 2 }}>Общий ФОТ в месяц (gross)</div>
+            <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>
+              со страховыми: {fmt(Math.round(totalFOTMonthly * 1.3))} ₽
+            </div>
+          </div>
+          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '10px 14px' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#059669' }}>{fmt(totalFOTAnnual)} ₽</div>
+            <div style={{ fontSize: 12, color: '#065F46', marginTop: 2 }}>Общий ФОТ в год (gross)</div>
+            <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>
+              со страховыми: {fmt(Math.round(totalFOTAnnual * 1.3))} ₽
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize: 12, color: '#0284C7', borderTop: '1px solid #BAE6FD', paddingTop: 10 }}>
         + Служба за скобками (диспетчерская + аварийная бригада) — общая на все объекты, учитывается отдельно
       </div>
@@ -181,6 +288,7 @@ function SummaryBlock({ plans }) {
 
 export default function TZStaffingView({ staffingPlans }) {
   const [activeIdx, setActiveIdx] = useState(0)
+  const [rates, setRates] = useState(DEFAULT_RATES)
 
   if (!staffingPlans?.length) return null
 
@@ -284,23 +392,19 @@ export default function TZStaffingView({ staffingPlans }) {
         <SLABlock constraints={plan.slaConstraints} />
       )}
 
-      {/* ₽ stub */}
-      <div style={{
-        background: '#F8FAFC', border: '1px dashed #CBD5E1',
-        borderRadius: 10, padding: '10px 14px',
-        display: 'flex', alignItems: 'center', gap: 10,
-      }}>
-        <span style={{ fontSize: 18, color: '#CBD5E1' }}>₽</span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: '#94A3B8' }}>Слой ФОТ — в следующей итерации</div>
-          <div style={{ fontSize: 12, color: '#CBD5E1' }}>
-            Ставки специалистов (МСК дефолты) · редактируемые · провенанс user
-          </div>
+      {/* ₽ layer — редактируемые ставки + ФОТ */}
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>
+          ФОТ — расчёт по объекту
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <SalaryRatesEditor rates={rates} onChange={setRates} />
+          <FOTCard plan={plan} rates={rates} />
         </div>
       </div>
 
-      {/* Summary across all buildings — shown only when multiple buildings */}
-      {staffingPlans.length > 1 && <SummaryBlock plans={staffingPlans} />}
+      {/* Summary across all buildings */}
+      {staffingPlans.length > 1 && <SummaryBlock plans={staffingPlans} rates={rates} />}
     </div>
   )
 }
