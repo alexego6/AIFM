@@ -30,9 +30,9 @@ function buildingShortName(name) {
   return name.slice(0, 18)
 }
 
-export default function TZScheduleView({ systemsData, buildings }) {
+export default function TZScheduleView({ systemsData, buildings, defaultMode = 'TO' }) {
   const [selectedBuildingId, setSelectedBuildingId] = useState(buildings[0]?.id ?? null)
-  const [selectedMode, setSelectedMode] = useState('TO')
+  const [selectedMode, setSelectedMode] = useState(defaultMode)
 
   const buildingSystems = (systemsData.find(b => b.buildingId === selectedBuildingId)?.systems ?? [])
     .filter(s => s.maintenanceTasks?.length > 0)
