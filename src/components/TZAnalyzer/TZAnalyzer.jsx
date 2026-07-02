@@ -109,9 +109,9 @@ export default function TZAnalyzer() {
     fileName, fileSize, parseWarnings,
     chunks, stage, stageStatus, stageError,
     buildings, systems,
-    scheduleStatus, scheduleTableCount, htmlContent,
+    scheduleStatus, scheduleTableCount, scheduleTables,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
-    setHtmlContent, setScheduleStatus,
+    setHtmlContent, setScheduleStatus, setScheduleTables,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
@@ -150,6 +150,12 @@ export default function TZAnalyzer() {
       if (html) {
         const { found, tableCount } = detectSchedule(html)
         await setScheduleStatus(found ? 'found' : 'not_found', tableCount)
+        if (found) {
+          // Parse schedule tables immediately and persist to IDB —
+          // so Stage 3 works even after a page reload between Stage 0 and Stage 2 confirm.
+          const tables = parseScheduleTables(html)
+          await setScheduleTables(tables)
+        }
       } else {
         await setScheduleStatus('not_found', 0)
       }
@@ -200,12 +206,11 @@ export default function TZAnalyzer() {
   }
 
   async function confirmStage2() {
-    // If schedule was detected and we have the HTML in memory → auto-run Stage 3
-    if (htmlContent && scheduleStatus === 'found') {
+    // Use pre-parsed schedule tables (persisted in IDB, survives reload)
+    if (scheduleTables?.length && scheduleStatus === 'found') {
       setStage3Error(null)
       setStage(3, 'running')
       try {
-        const scheduleTables = parseScheduleTables(htmlContent)
         const enriched = runStage3(systems, buildings, scheduleTables)
         await setSystems(enriched)
         await setScheduleStatus('merged', scheduleTableCount)
@@ -215,7 +220,7 @@ export default function TZAnalyzer() {
         setStage(3, 'error', err.message)
       }
     } else {
-      // No schedule in doc (or HTML not available in this session) → stub
+      // No schedule found (or not a DOCX) → stub
       setStage(3, 'no_schedule')
     }
   }

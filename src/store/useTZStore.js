@@ -66,7 +66,10 @@ export const useTZStore = create((set) => ({
   scheduleStatus: 'unknown',  // 'unknown' | 'found' | 'not_found' | 'merged'
   scheduleTableCount: 0,
 
-  // HTML документа — только в памяти, нужен для parseScheduleTables в текущей сессии
+  // Распарсенные таблицы графика — хранятся в IDB (не нужен HTML при перезагрузке)
+  scheduleTables: null,  // result of parseScheduleTables, persisted
+
+  // HTML документа — только в памяти (не нужен после парсинга таблиц)
   htmlContent: null,
 
   // ── действия ─────────────────────────────────────────────────────────────
@@ -106,12 +109,18 @@ export const useTZStore = create((set) => ({
     await idb.set('schedule_status', { status, tableCount })
   },
 
+  setScheduleTables: async (tables) => {
+    set({ scheduleTables: tables })
+    await idb.set('schedule_tables', tables)
+  },
+
   reset: async () => {
     set({
       fileName: null, fileSize: null, parseWarnings: [],
       chunks: [], stage: 0, stageStatus: 'idle', stageError: null,
       buildings: [], systems: [],
-      scheduleStatus: 'unknown', scheduleTableCount: 0, htmlContent: null,
+      scheduleStatus: 'unknown', scheduleTableCount: 0,
+      scheduleTables: null, htmlContent: null,
     })
     await idb.clear()
   },
@@ -123,32 +132,36 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta, schedData] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData, schedTables] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
       idb.get('meta'),
       idb.get('schedule_status'),
+      idb.get('schedule_tables'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
     if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = 0; patch.stageStatus = 'done' }
     if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'done' }
+
+    // Restore schedule detection result (available from Stage 0 onward)
+    if (schedData) {
+      patch.scheduleStatus = schedData.status
+      patch.scheduleTableCount = schedData.tableCount ?? 0
+    }
+    if (schedTables?.length) {
+      patch.scheduleTables = schedTables
+    }
+
     if (systems?.length) {
       patch.systems = systems
       if (schedData?.status === 'merged') {
-        // Stage 3 was completed — restore at stage 3 done
         patch.stage = 3
         patch.stageStatus = 'done'
-        patch.scheduleStatus = 'merged'
-        patch.scheduleTableCount = schedData.tableCount ?? 0
       } else {
         patch.stage = 2
         patch.stageStatus = 'checkpoint'
-        if (schedData) {
-          patch.scheduleStatus = schedData.status
-          patch.scheduleTableCount = schedData.tableCount ?? 0
-        }
       }
     }
     if (Object.keys(patch).length) set(patch)
