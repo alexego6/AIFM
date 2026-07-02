@@ -6,6 +6,7 @@ import { runStage1, runStage2, detectSchedule, parseScheduleTables, runStage3 } 
 import TZUploadZone from './TZUploadZone'
 import TZBuildingTabs from './TZBuildingTabs'
 import TZSystemsView from './TZSystemsView'
+import TZScheduleView from './TZScheduleView'
 
 // ── Пайплайн-степпер ──────────────────────────────────────────────────────────
 const STAGES = [
@@ -488,8 +489,11 @@ export default function TZAnalyzer() {
               <div style={{ fontSize: 12, color: '#64748B' }}>{scheduleTableCount} таблиц · 0 API-вызовов</div>
             </div>
             <TZSystemsView systemsData={systems} buildings={buildings} />
-            <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: '#166534' }}>
-              Этап 4 (сводный календарь обслуживания) — в разработке.
+            <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', marginBottom: 16 }}>
+                Сводный план-график обслуживания
+              </div>
+              <TZScheduleView systemsData={systems} buildings={buildings} />
             </div>
           </div>
         )}
