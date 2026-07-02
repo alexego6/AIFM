@@ -1,4 +1,9 @@
-const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY
+const API_KEY =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ANTHROPIC_API_KEY) ||
+  (typeof process !== 'undefined' && process.env &&
+    (process.env.VITE_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY)) || ''
+
+export const apiUsage = { inputTokens: 0, outputTokens: 0, calls: 0 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 async function callClaude(prompt, maxTokens = 4096) {
@@ -20,6 +25,9 @@ async function callClaude(prompt, maxTokens = 4096) {
   })
   if (!res.ok) { const e = new Error(`API ${res.status}`); e.code = 'API_ERROR'; throw e }
   const data = await res.json()
+  apiUsage.inputTokens += data.usage?.input_tokens ?? 0
+  apiUsage.outputTokens += data.usage?.output_tokens ?? 0
+  apiUsage.calls++
   if (data.stop_reason === 'max_tokens') {
     const e = new Error('Response truncated by max_tokens'); e.code = 'TRUNCATED'; throw e
   }
@@ -370,6 +378,9 @@ function normalizeSystemsResult(rawData, buildings) {
               capacity: eq.capacity ?? null,
               location: eq.location ?? null,
               confidence: ['high', 'medium', 'low'].includes(eq.confidence) ? eq.confidence : 'medium',
+              missing: Array.isArray(eq.missing) ? eq.missing : [],
+              source: ['tz', 'user', 'web'].includes(eq.source) ? eq.source : 'tz',
+              unmatched: !!eq.unmatched,
             }))
           : [],
       }
@@ -380,7 +391,7 @@ function normalizeSystemsResult(rawData, buildings) {
 
 const S2_BATCH_SIZE = 8_000
 const S2_MAX_TOKENS = 16_000
-const S2_CONSOLIDATE_MAX_TOKENS = 12_000
+export const S2_CONSOLIDATE_MAX_TOKENS = 12_000
 
 async function extractWithBisect(buildings, text, depth = 4, log = () => {}) {
   try {
@@ -416,16 +427,28 @@ async function extractWithBisect(buildings, text, depth = 4, log = () => {}) {
  * Проход 2 — консолидация, дедупликация, обогащение.
  * onProgress(pct, batch, total)
  */
-export async function runStage2(buildings, chunks, onProgress) {
+async function _runStage2Legacy(buildings, chunks, onProgress, {
+  onBatchComplete = null,
+  initialRaw = [],
+  startIndex = 0,
+  maxBatches = Infinity,
+} = {}) {
   const batches = makeBatches(chunks, S2_BATCH_SIZE)
   const totalSteps = batches.length + 1
-  const rawResults = []
+  const rawResults = [...initialRaw]
+  const endIndex = Math.min(startIndex + maxBatches, batches.length)
 
-  for (let i = 0; i < batches.length; i++) {
+  for (let i = startIndex; i < endIndex; i++) {
     onProgress?.(Math.round((i / totalSteps) * 100), i + 1, totalSteps)
     const log = msg => console.log(`  s2b${i + 1}/${batches.length}: ${msg}`)
     const results = await extractWithBisect(buildings, batches[i], 4, log)
     rawResults.push(...results)
+    onBatchComplete?.(i, rawResults, batches.length)
+  }
+
+  if (endIndex < batches.length) {
+    onProgress?.(Math.round((endIndex / totalSteps) * 100), endIndex + 1, totalSteps)
+    return normalizeSystemsResult(rawResults, buildings)
   }
 
   onProgress?.(Math.round((batches.length / totalSteps) * 100), batches.length + 1, totalSteps)
@@ -442,4 +465,231 @@ export async function runStage2(buildings, chunks, onProgress) {
 
   onProgress?.(100, totalSteps, totalSteps)
   return normalizeSystemsResult(finalData, buildings)
+}
+
+// ── Spine-first extraction ─────────────────────────────────────────────────────
+
+export function parseApp2Table(html) {
+  const tables = html.match(/<table[\s\S]*?<\/table>/g) || []
+  const tbl = tables.find(t =>
+    t.includes('сновные технические') &&
+    (t.match(/<tr/g) || []).length > 100
+  )
+  if (!tbl) return []
+
+  const rows = (tbl.match(/<tr[\s\S]*?<\/tr>/g) || [])
+    .map(r =>
+      (r.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/g) || [])
+        .map(c => c.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
+    )
+
+  const sections = []
+  let cur = null
+
+  for (const cells of rows.slice(4)) {
+    const name = cells[0] || ''
+    if (!name) continue
+    const isHeader = cells.slice(2, 7).every(c => !c || /^[-—\s]*$/.test(c))
+    if (isHeader && name.length > 3) {
+      if (/^(Система|Лифт|ЦТП|ИТП|Теплоснабж|Котел)/i.test(name)) {
+        cur = { sectionTitle: name, rows: [] }
+        sections.push(cur)
+      }
+      continue
+    }
+    if (!cur) continue
+    cur.rows.push({
+      name, unit: cells[1] || '',
+      byBuilding: {
+        km1: cells[2] || '', km2: cells[3] || '', hyp: cells[4] || '',
+        usa: cells[5] || '', nez: cells[6] || '', itogo: cells[7] || '',
+      },
+    })
+  }
+  return sections
+}
+
+export function getBuildingApp2Key(building) {
+  const n = (building.name + ' ' + (building.address ?? '')).toLowerCase()
+  if (/гиперкуб/.test(n)) return 'hyp'
+  if (/усадьб/.test(n)) return 'usa'
+  if (/нежил/.test(n)) return 'nez'
+  if (/менделеев/.test(n) && /корп.*2|2.*корп/.test(n)) return 'km2'
+  if (/менделеев/.test(n)) return 'km1'
+  return null
+}
+
+function classifyRowToCategory(name) {
+  const n = name.toLowerCase()
+  if (/лифт|эскалатор|подъёмник|подъемник/.test(n)) return 'elevator'
+  if (/\bлвс\b|лвс и|лвс.*скс|скс.*порт|количество.*порт/.test(n)) return 'lowcurrent'
+  if (/акустич|сабвуфер|усилитель.*\d+.*вт|усилитель.*w|микрофон|blu.?ray|dvd|плеер|медиа.*плеер|медиафасад|бегущ.*строк|traxon|digico|синхроперевод|микшер|сцени.*свет|сцени.*монитор|iptv|проектор|плазм|экран.*электроприв/.test(n)) return 'media'
+  if (/котел|тепловой насос|геотерм|геозонд|тепловая завеса|тепловой пункт|\bитп\b|радиатор|конвектор|солнечн.*батар/.test(n)) return 'heating'
+  if (/вентиля|кондиц|приточн|вытяжн|фанкойл|охлаждающ|воздуховод|рекуператор/.test(n)) return 'hvac'
+  if (/пожар|огнетуш|дымоудален|аупт|стрелец|рспи|извещател|громкоговор|оповещ/.test(n)) return 'fire'
+  if (/видеокамер|скуд|считыватель|sipass|ade\d|ars\d|магнитоконтакт|st-ex|st-dm/.test(n)) return 'security'
+  if (/\bвру\b|грщ|\bщит\b|щиты|светильник|освещен|ибп|eaton|меркурий/.test(n)) return 'electrical'
+  if (/водоснабж|водоотвед|канализ|водопровод|ливнеотвод|санитарно|трубопровод|водонагрев|насос.*цирк|расширит.*бак|гидроаккум/.test(n)) return 'plumbing'
+  if (/диспетчер|bms|асуд|автоматик.*инженер/.test(n)) return 'bms'
+  if (/кровл|фасад|остеклен|напольн/.test(n)) return 'structural'
+  return null
+}
+
+export function classifyApp2Evidence(rows) {
+  const evidence = {}
+  for (const row of rows) {
+    const cat = classifyRowToCategory(row.name)
+    if (!cat) continue
+    if (!evidence[cat]) evidence[cat] = []
+    evidence[cat].push({ name: row.name, qty: row.qty })
+  }
+  return evidence
+}
+
+function getChunksForBuilding(building, chunks) {
+  const clean = building.name.replace(/[«»""]/g, '').toLowerCase()
+  const words = clean.split(/\s+/).filter(w => w.length > 4)
+  const hits = chunks.filter(c => words.some(w => c.toLowerCase().includes(w)))
+  const prose = hits.length >= 2 ? hits.slice(0, 10) : chunks.slice(0, 5)
+  return prose
+}
+
+const SPINE_CATEGORIES_LIST = [
+  'heating — теплоснабжение, ИТП, котлы, тепловые пункты',
+  'hvac — вентиляция, кондиционирование, холодоснабжение, чиллеры, фанкойлы',
+  'plumbing — водоснабжение (ХВС, ГВС), канализация, водоотведение',
+  'electrical — электроснабжение, ГРЩ/ВРУ, трансформаторы, освещение, ИБП',
+  'fire — АПС, пожаротушение (АУПТ), СОУЭ, пожарные краны, противодымная защита',
+  'security — охранная сигнализация, СКУД, видеонаблюдение',
+  'lowcurrent — ЛВС/СКС, АТС, телефония, радиофикация',
+  'media — аудио/видео, конференц-системы, вывески, IPTV',
+  'bms — диспетчеризация, BMS, АСУД, АСУ ТП, автоматика инженерных систем',
+  'elevator — лифты, подъёмники, эскалаторы',
+  'structural — кровля, фасад, окна, полы, несущие конструкции, благоустройство',
+  'other — всё что не входит в перечисленные выше',
+].join('\n')
+
+// TODO(dual-source-spine): спайн сейчас строится только по прозе ТЗ.
+// classifyApp2Evidence / classifyRowToCategory уже реализованы и дают 10 категорий
+// из Прил.2 для Гиперкуба (lowcurrent, media, bms etc.), но evidenceStr не подаётся
+// в extractSpineForBuilding — оттого эти категории пропадают если их нет в прозе.
+// Правильный фикс: добавить evidenceStr в SPINE_EXTRACT_PROMPT с dual-source rule
+// (система входит в спайн если в прозе ИЛИ в Прил.2 с qty≥1), ставить needsReview:true
+// для систем только из Прил.2. Тогда lowcurrent/media/bms войдут в спайн.
+const SPINE_EXTRACT_PROMPT = (building, proseText) => `Ты — эксперт по технической эксплуатации зданий.
+
+ЗДАНИЕ: ${building.name}${building.address ? ', ' + building.address : ''}${building.sub_buildings?.length ? '\nСТРОЕНИЯ: ' + building.sub_buildings.join(', ') : ''}
+
+КАТЕГОРИИ СИСТЕМ:
+${SPINE_CATEGORIES_LIST}
+
+ВАЖНО: для каждой КАТЕГОРИИ верни ровно ОДНУ запись — даже если несколько контуров.
+Включай категорию только если она явно упомянута в тексте ТЗ.
+Используй общее название без номеров корпусов.
+
+Поля:
+• category — один из кодов выше
+• name — официальное название из текста
+• scope — "building" или "sub_building"
+• subBuildingId — название строения из списка СТРОЕНИЯ или null
+• needsReview — false (оставить поле для совместимости)
+
+Верни ТОЛЬКО JSON-массив без markdown. Пример:
+[{"category":"electrical","name":"Система электроснабжения","scope":"building","subBuildingId":null,"needsReview":false}]
+
+ФРАГМЕНТ ТЗ:
+${proseText}`
+
+async function extractSpineForBuilding(building, proseText) {
+  try {
+    const raw = await callClaude(SPINE_EXTRACT_PROMPT(building, proseText), 4096)
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
+const SPINE_ATTACH_PROMPT = (spine, rows) => `Ты — эксперт по технической эксплуатации зданий.
+
+СИСТЕМЫ ЗДАНИЯ (спайн):
+${spine.map((s, i) => `${i + 1}. [${s.category}] ${s.name}`).join('\n')}
+
+ОБОРУДОВАНИЕ ИЗ ПЕРЕЧНЯ (Приложение 2), по данному зданию:
+${rows.map(r => `- "${r.name}" | ${r.unit} | qty=${r.qty}`).join('\n')}
+
+ЗАДАЧА: для каждой строки оборудования определи:
+1. К какой системе из спайна относится (по category)
+2. Бренд и модель из названия (если есть явный производитель)
+3. Если ни одна система не подходит → unmatched: true
+
+ПРАВИЛО: НЕ создавай новых систем. Только прикрепляй к существующим.
+
+Верни JSON-массив — по одной записи на категорию из спайна (даже если equipment пуст).
+Формат:
+[{"category":"electrical","equipment":[{"name":"ВРУ","brand":null,"model":null,"qty":1,"unit":"шт.","class":"distribution_panel","confidence":"high","unmatched":false}]}]
+
+ТОЛЬКО JSON без markdown.`
+
+async function attachApp2Equipment(spine, rows) {
+  if (!rows.length) return spine.map(s => ({ ...s, equipment: [] }))
+  try {
+    const numbered = rows
+      .map(r => ({ name: r.name, unit: r.unit, qty: parseFloat(String(r.qty)) || 0 }))
+      .filter(r => r.qty > 0 && r.name)
+    if (!numbered.length) return spine.map(s => ({ ...s, equipment: [] }))
+
+    const raw = await callClaude(SPINE_ATTACH_PROMPT(spine, numbered), 16_000)
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) throw new Error('NOT_ARRAY')
+
+    return spine.map(s => {
+      const found = parsed.find(p => p.category === s.category)
+      return { ...s, equipment: Array.isArray(found?.equipment) ? found.equipment : [] }
+    })
+  } catch {
+    return spine.map(s => ({ ...s, equipment: [] }))
+  }
+}
+
+export async function runStage2(buildings, chunks, onProgress, {
+  htmlContent = null,
+  onBatchComplete = null,
+  initialRaw = [],
+  startIndex = 0,
+  maxBatches = Infinity,
+} = {}) {
+  if (!htmlContent) {
+    return _runStage2Legacy(buildings, chunks, onProgress,
+      { onBatchComplete, initialRaw, startIndex, maxBatches })
+  }
+
+  const sections = parseApp2Table(htmlContent)
+  const results = []
+
+  for (const building of buildings) {
+    const colKey = getBuildingApp2Key(building)
+    if (!colKey) {
+      console.warn(`[spine] нет mapping для "${building.name}", пропуск`)
+      continue
+    }
+
+    const proseChunks = getChunksForBuilding(building, chunks)
+    const prose = proseChunks.join('\n\n').slice(0, 20_000)
+
+    const app2Rows = sections.flatMap(s =>
+      s.rows
+        .filter(r => /\d/.test(r.byBuilding[colKey] ?? ''))
+        .map(r => ({ name: r.name, unit: r.unit, qty: r.byBuilding[colKey] }))
+    )
+    console.log(`[spine] ${building.name}: ${proseChunks.length} чанков, ${app2Rows.length} Прил.2 строк`)
+
+    const spine = await extractSpineForBuilding(building, prose)
+    console.log(`[spine] ${building.name}: ${spine.length} систем`)
+
+    const systems = await attachApp2Equipment(spine, app2Rows)
+    results.push({ buildingId: building.id, systems })
+    onProgress?.((results.length / buildings.length * 100) | 0, results.length, buildings.length)
+  }
+
+  onProgress?.(100, buildings.length, buildings.length)
+  return normalizeSystemsResult(results, buildings)
 }
