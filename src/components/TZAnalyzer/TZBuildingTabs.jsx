@@ -1,12 +1,15 @@
 import { useState } from 'react'
 
 const FIELD_LABELS = {
-  address:    'Адрес',
-  floors:     'Этажей',
-  area_m2:    'Площадь, кв.м',
-  year_built: 'Год постройки',
-  purpose:    'Назначение',
+  address:           'Адрес',
+  floors:            'Этажей',
+  areaSqm:           'Площадь пола, кв.м',
+  territoryAreaSqm:  'Площадь участка, кв.м',
+  year_built:        'Год постройки',
+  purpose:           'Назначение',
 }
+
+const AREA_KEYS = new Set(['areaSqm', 'territoryAreaSqm'])
 
 function BuildingCard({ building }) {
   const fields = Object.entries(FIELD_LABELS).filter(([k]) => building[k] != null)
@@ -22,13 +25,33 @@ function BuildingCard({ building }) {
         }}>
           {building.id.replace('b', '')}
         </div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', lineHeight: 1.2 }}>{building.name}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', lineHeight: 1.2 }}>{building.name}</div>
+            {building.needsReview && (
+              <span style={{
+                fontSize: 10, fontWeight: 600, color: '#D97706',
+                background: '#FFFBEB', border: '1px solid #FDE68A',
+                borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap',
+              }}>
+                ★ требует проверки
+              </span>
+            )}
+          </div>
           {building.purpose && (
             <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{building.purpose}</div>
           )}
         </div>
       </div>
+
+      {building.areaSqm == null && (
+        <div style={{
+          background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8,
+          padding: '7px 12px', fontSize: 12, color: '#92400E', marginBottom: 12,
+        }}>
+          Площадь пола не найдена в ТЗ — уточните вручную перед расчётом штата
+        </div>
+      )}
 
       {fields.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
@@ -36,7 +59,9 @@ function BuildingCard({ building }) {
             <div key={k}>
               <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</div>
               <div style={{ fontSize: 13, fontWeight: 500, color: '#1E293B', marginTop: 1 }}>
-                {k === 'area_m2' ? building[k].toLocaleString('ru') : building[k]}
+                {AREA_KEYS.has(k)
+                  ? building[k].toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+                  : building[k]}
               </div>
             </div>
           ))}
