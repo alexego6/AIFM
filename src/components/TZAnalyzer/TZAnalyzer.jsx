@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useTZStore } from '../../store/useTZStore'
+import { usePlatformStore } from '../../store/usePlatformStore'
 import { parseFile, parseDocxHtml } from '../../services/docParser'
 import { chunkByHeadings } from '../../services/chunkText'
 import { runStage1, runStage2, detectSchedule, parseScheduleTables, runStage3 } from '../../services/tzPipeline'
 import { calcAllStaffing } from '../../services/staffingHeuristic'
 import { calcAllResources } from '../../services/resourcesHeuristic'
+import { validateTZForApply, mapBuildings, mapSystemsData } from '../../services/platformAdapter'
+import { useAppStore } from '../../store/useAppStore'
 import TZUploadZone from './TZUploadZone'
 import TZBuildingTabs from './TZBuildingTabs'
 import TZSystemsView from './TZSystemsView'
@@ -121,10 +124,14 @@ export default function TZAnalyzer() {
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
 
-  const [parseError, setParseError] = useState(null)
-  const [stage1Progress, setStage1Progress] = useState(null) // { pct, batch, total }
-  const [stage2Progress, setStage2Progress] = useState(null) // { pct, batch, total }
-  const [stage3Error, setStage3Error] = useState(null)
+  const { applyFromTZ, applied: platformApplied, appliedAt } = usePlatformStore()
+  const { setActiveSection } = useAppStore()
+
+  const [parseError,     setParseError]     = useState(null)
+  const [stage1Progress, setStage1Progress] = useState(null)
+  const [stage2Progress, setStage2Progress] = useState(null)
+  const [stage3Error,    setStage3Error]    = useState(null)
+  const [applyRunning,   setApplyRunning]   = useState(false)
 
   useEffect(() => { loadFromDB() }, [loadFromDB])
 
@@ -622,12 +629,87 @@ export default function TZAnalyzer() {
               </div>
               <TZResourcesView resourcesPlans={resourcesPlan} />
             </div>
-            <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '14px 16px' }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#0369A1', marginBottom: 4 }}>Этап 6 — Интеграция</div>
-              <div style={{ fontSize: 12, color: '#7DD3FC', padding: '6px 10px', background: '#E0F2FE', borderRadius: 8, display: 'inline-block' }}>
-                в разработке
-              </div>
-            </div>
+            {/* Этап 6 — Применить в платформу */}
+            {(() => {
+              const validation = validateTZForApply({ buildings, systems, staffingPlan, resourcesPlan })
+              async function handleApply() {
+                if (!validation.ok || applyRunning) return
+                setApplyRunning(true)
+                try {
+                  await applyFromTZ({
+                    buildings:    mapBuildings(buildings),
+                    systemsData:  mapSystemsData(systems),
+                    staffingPlan,
+                    resourcesPlan,
+                  })
+                  await confirmStage(6)
+                  setActiveSection('dashboard')
+                } finally {
+                  setApplyRunning(false)
+                }
+              }
+
+              if (platformApplied && appliedAt) {
+                return (
+                  <div style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#059669' }}>Применено в платформу</div>
+                      <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>{new Date(appliedAt).toLocaleString('ru-RU')}</div>
+                    </div>
+                    <button
+                      onClick={() => setActiveSection('dashboard')}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#059669', background: 'none', border: '1px solid #A7F3D0', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontFamily: "'Golos Text',system-ui,sans-serif" }}
+                    >Дашборд →</button>
+                  </div>
+                )
+              }
+
+              return (
+                <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#0369A1' }}>Этап 6 — Интеграция в платформу</div>
+
+                  {/* Validation */}
+                  {(validation.errors.length > 0 || validation.warnings.length > 0) && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {validation.errors.map((e, i) => (
+                        <div key={i} style={{ fontSize: 12, color: '#B91C1C', display: 'flex', gap: 6 }}>
+                          <span>✗</span><span>{e}</span>
+                        </div>
+                      ))}
+                      {validation.warnings.map((w, i) => (
+                        <div key={i} style={{ fontSize: 12, color: '#D97706', display: 'flex', gap: 6 }}>
+                          <span>⚠</span><span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {validation.ok && (
+                    <div style={{ fontSize: 12, color: '#0369A1', lineHeight: 1.6 }}>
+                      Объектов: <strong>{buildings.length}</strong> · Систем-данных: <strong>{systems.length}</strong>
+                      {staffingPlan.length > 0 && <> · Штат: <strong>{staffingPlan.length} объектов</strong></>}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleApply}
+                    disabled={!validation.ok || applyRunning}
+                    style={{
+                      alignSelf: 'flex-start',
+                      padding: '10px 22px', borderRadius: 10, border: 'none', cursor: validation.ok && !applyRunning ? 'pointer' : 'not-allowed',
+                      background: validation.ok ? '#1D4ED8' : '#E2E8F0',
+                      color: validation.ok ? '#FFFFFF' : '#94A3B8',
+                      fontSize: 14, fontWeight: 600,
+                      fontFamily: "'Golos Text',system-ui,sans-serif",
+                      opacity: applyRunning ? 0.7 : 1,
+                    }}
+                  >
+                    {applyRunning ? 'Применяется…' : 'Применить в платформу →'}
+                  </button>
+                </div>
+              )
+            })()}
           </div>
         )}
 

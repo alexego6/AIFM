@@ -1,4 +1,6 @@
+import { useMemo } from 'react'
 import { useTZStore } from '../../store/useTZStore'
+import { usePlatformStore } from '../../store/usePlatformStore'
 import TZScheduleView from '../TZAnalyzer/TZScheduleView'
 
 const EmptyState = () => (
@@ -20,8 +22,22 @@ const EmptyState = () => (
 )
 
 export default function ScheduleEK() {
-  const { systems, buildings, fileName } = useTZStore()
+  const { systems: tzSystems, buildings: tzBuildings, fileName } = useTZStore()
+  const { applied, systemsData, buildings: pBuildings, activeBuildingId } = usePlatformStore()
+
+  const [systems, buildings] = useMemo(() => {
+    if (!applied || !systemsData.length) return [tzSystems, tzBuildings]
+    const filtered = activeBuildingId
+      ? systemsData.filter(s => s.buildingId === activeBuildingId)
+      : systemsData
+    const bldgs = activeBuildingId
+      ? pBuildings.filter(b => b.id === activeBuildingId)
+      : pBuildings
+    return [filtered, bldgs]
+  }, [applied, systemsData, pBuildings, activeBuildingId, tzSystems, tzBuildings])
+
   const hasData = systems.length > 0 && buildings.length > 0
+  const source  = applied ? null : fileName
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20, background: '#F3F5FA' }}>
@@ -34,13 +50,22 @@ export default function ScheduleEK() {
             Регламентные осмотры и измерения инженерных систем
           </p>
         </div>
-        {fileName && (
+        {source && (
           <div style={{
             marginLeft: 'auto', fontSize: 12, color: '#0369A1',
             background: '#F0F9FF', border: '1px solid #BAE6FD',
             borderRadius: 8, padding: '5px 12px', whiteSpace: 'nowrap',
           }}>
-            Источник: {fileName}
+            Источник: {source}
+          </div>
+        )}
+        {applied && (
+          <div style={{
+            marginLeft: 'auto', fontSize: 12, color: '#059669',
+            background: '#F0FDF4', border: '1px solid #A7F3D0',
+            borderRadius: 8, padding: '5px 12px', whiteSpace: 'nowrap',
+          }}>
+            Применено из ТЗ
           </div>
         )}
       </div>

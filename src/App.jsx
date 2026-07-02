@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Sidebar from './components/Sidebar/Sidebar'
 import BuildingView from './components/BuildingView/BuildingView'
 import BIMViewer from './components/BIMViewer/BIMViewer'
@@ -10,6 +10,7 @@ import Dashboard from './components/Dashboard/Dashboard'
 import TZAnalyzer from './components/TZAnalyzer/TZAnalyzer'
 import { useAppStore } from './store/useAppStore'
 import { useTZStore } from './store/useTZStore'
+import { usePlatformStore } from './store/usePlatformStore'
 import './index.css'
 
 const SECTION_LABELS = {
@@ -30,6 +31,10 @@ const BTI_MIME = /^(application\/pdf|image\/)/
 export default function App() {
   const { activeSection, setActiveSection, setBimPendingFile, setBtiPendingFile } = useAppStore()
   const { setTzPendingFile } = useTZStore()
+  const { applied, buildings: pBuildings, activeBuildingId, setActiveBuildingId, loadFromDB: loadPlatform } = usePlatformStore()
+
+  // Load platform store from IDB on mount
+  useEffect(() => { loadPlatform() }, [loadPlatform])
   const [globalDrag, setGlobalDrag] = useState(false)
 
   const onGlobalDragOver = useCallback((e) => {
@@ -132,7 +137,24 @@ export default function App() {
         {/* Topbar */}
         <header style={{ height:60, flex:'none', background:'#FFFFFF', borderBottom:'1px solid #E8ECF5', display:'flex', alignItems:'center', padding:'0 22px', gap:18, boxShadow:'0 1px 4px rgba(29,78,216,0.05)' }}>
           <div style={{ display:'flex', flexDirection:'column', lineHeight:1.15, minWidth:0 }}>
-            <div style={{ fontSize:11, color:'#9CA3AF', letterSpacing:'.4px' }}>БЦ «Меридиан» · Корпус B</div>
+            {applied && pBuildings.length > 0 ? (
+              <select
+                value={activeBuildingId ?? pBuildings[0]?.id ?? ''}
+                onChange={e => setActiveBuildingId(e.target.value)}
+                style={{
+                  fontSize:11, color:'#1D4ED8', letterSpacing:'.3px', fontWeight:600,
+                  background:'none', border:'none', cursor:'pointer', padding:0,
+                  fontFamily:"'Golos Text',system-ui,sans-serif", appearance:'none',
+                  WebkitAppearance:'none', outline:'none', maxWidth:260,
+                }}
+              >
+                {pBuildings.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div style={{ fontSize:11, color:'#9CA3AF', letterSpacing:'.4px' }}>БЦ «Меридиан» · Корпус B</div>
+            )}
             <div style={{ fontSize:16, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
               {SECTION_LABELS[activeSection]}
             </div>
