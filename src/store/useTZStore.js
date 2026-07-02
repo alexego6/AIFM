@@ -102,7 +102,10 @@ export const useTZStore = create((set) => ({
     await idb.set('systems', systems)
   },
 
-  setHtmlContent: (html) => set({ htmlContent: html }),
+  setHtmlContent: async (html) => {
+    set({ htmlContent: html })
+    if (html) await idb.set('html', html)
+  },
 
   setScheduleStatus: async (status, tableCount = 0) => {
     set({ scheduleStatus: status, scheduleTableCount: tableCount })
@@ -132,16 +135,18 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta, schedData, schedTables] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData, schedTables, html] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
       idb.get('meta'),
       idb.get('schedule_status'),
       idb.get('schedule_tables'),
+      idb.get('html'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
+    if (html)              { patch.htmlContent = html }
     if (chunks?.length)    { patch.chunks    = chunks;    patch.stage = 0; patch.stageStatus = 'done' }
     if (buildings?.length) { patch.buildings = buildings; patch.stage = 1; patch.stageStatus = 'done' }
 

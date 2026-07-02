@@ -146,7 +146,7 @@ export default function TZAnalyzer() {
       setParseWarnings(warnings)
       setFile(file.name, file.size)
 
-      setHtmlContent(html)
+      await setHtmlContent(html)
       if (html) {
         const { found, tableCount } = detectSchedule(html)
         await setScheduleStatus(found ? 'found' : 'not_found', tableCount)
