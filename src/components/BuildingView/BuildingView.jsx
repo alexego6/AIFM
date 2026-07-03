@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { EQUIPMENT, SYSTEMS, FLOORS } from '../../data/building'
 import { useAppStore } from '../../store/useAppStore'
+import { usePlatformStore } from '../../store/usePlatformStore'
 import BTIRecognizer from '../BTIRecognizer/BTIRecognizer'
 
 
@@ -241,6 +242,7 @@ export default function BuildingView() {
   // Начинаем в режиме плана БТИ; «К зданию» переключает обратно на изометрию
   const [showBTI, setShowBTI]             = useState(true)
   const { btiPlanImage, btiPendingFile } = useAppStore()
+  const { applied } = usePlatformStore()
 
   // Если пришёл файл через глобальный дроп — открыть BTI
   useEffect(() => {
@@ -260,6 +262,54 @@ export default function BuildingView() {
     return (
       <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', background:'#F3F5FA', position:'relative' }}>
         <BTIRecognizer onClose={() => setShowBTI(false)} />
+      </div>
+    )
+  }
+
+  // При applied цифровой двойник (изометрия + план) на моках не показываем
+  if (applied) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', background:'#F3F5FA', padding:24, gap:16 }}>
+        <div>
+          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>План здания</h1>
+          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>Цифровой двойник и поэтажные планы</p>
+        </div>
+        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12 }}>
+          {/* BTI доступен всегда — это загруженный пользователем файл */}
+          <button onClick={() => setShowBTI(true)} style={{
+            alignSelf:'flex-start', display:'flex', alignItems:'center', gap:10,
+            background: btiPlanImage ? 'linear-gradient(135deg,#F0FDF4,#ECFDF5)' : 'linear-gradient(135deg,#EEF2FF,#F5F3FF)',
+            border:`1.5px dashed ${btiPlanImage ? '#6EE7B7' : '#A5B4FC'}`, borderRadius:14, padding:'12px 16px',
+            cursor:'pointer', fontFamily:'inherit', textAlign:'left',
+          }}>
+            <span style={{ width:38, height:38, flex:'none', borderRadius:10, background: btiPlanImage ? 'linear-gradient(135deg,#059669,#10B981)' : 'linear-gradient(135deg,#4F46E5,#7C3AED)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+              </svg>
+            </span>
+            <div>
+              <div style={{ fontSize:13, fontWeight:600, color: btiPlanImage ? '#065F46' : '#3730A3' }}>
+                {btiPlanImage ? 'Открыть план БТИ' : 'Загрузить план БТИ'}
+              </div>
+              <div style={{ fontSize:11, color: btiPlanImage ? '#059669' : '#6366F1', marginTop:2 }}>
+                {btiPlanImage ? 'Нажмите для просмотра' : 'PDF или фото → список помещений'}
+              </div>
+            </div>
+          </button>
+
+          {/* Заглушка для изометрии */}
+          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ textAlign:'center', maxWidth:400, display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>
+              </svg>
+              <div style={{ fontSize:15, fontWeight:600, color:'#94A3B8' }}>Цифровой двойник в разработке</div>
+              <div style={{ fontSize:13, color:'#CBD5E1', lineHeight:1.6 }}>
+                Интерактивная модель здания будет привязана к BIM-модели объекта — раздел в разработке
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }

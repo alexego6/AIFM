@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { EQUIPMENT, SYSTEMS } from '../../data/building'
 import { WEAR_DATA } from '../../data/wear'
 import { fetchWearPrediction } from '../../services/claudeApi'
+import { usePlatformStore } from '../../store/usePlatformStore'
 
 const MERGED = EQUIPMENT.map(eq => {
   const wd = WEAR_DATA.find(w => w.equipmentId === eq.id)
@@ -108,8 +109,35 @@ function DetailPanel({ item, onClose, aiText, aiLoading }) {
 
 const cardStyle = { background:'#FFFFFF', border:'1px solid #E8ECF5', borderRadius:14, padding:'16px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }
 
+function WearDevStub() {
+  return (
+    <div style={{ display:'flex', height:'100%', background:'#F3F5FA', overflow:'hidden' }}>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', padding:24, gap:18 }}>
+        <div>
+          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Прогноз износа оборудования</h1>
+          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>ИИ-модель остаточного ресурса на основе наработки и истории отказов</p>
+        </div>
+        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ textAlign:'center', maxWidth:400, display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <div style={{ fontSize:15, fontWeight:600, color:'#94A3B8' }}>Прогноз износа в разработке</div>
+            <div style={{ fontSize:13, color:'#CBD5E1', lineHeight:1.6 }}>
+              Прогноз будет рассчитываться на основе данных из ТЗ и истории отказов оборудования — раздел в разработке
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function WearPrediction() {
+  const { applied } = usePlatformStore()
   const [selectedId, setSelectedId] = useState(null)
+
+  if (applied) return <WearDevStub />
   const [aiText, setAiText]         = useState(null)
   const [aiLoading, setAiLoading]   = useState(false)
 
