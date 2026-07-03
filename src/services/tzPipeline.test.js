@@ -67,7 +67,7 @@ describe('runStage1', () => {
       id: 'b1',
       name: 'Бизнес-центр «Альфа»',
       floors: 10,
-      area_m2: 25000,
+      areaSqm: 25000,
       sub_buildings: [],
     })
   })
@@ -157,7 +157,7 @@ describe('runStage1', () => {
 
     const result = await runStage1([SMALL_CHUNK])
     expect(result[0].floors).toBeNull()   // string not a number — should be null
-    expect(result[0].area_m2).toBeNull()  // string not a number — should be null
+    expect(result[0].areaSqm).toBeNull()  // string not a number — should be null
     expect(result[0].sub_buildings).toEqual([]) // null → []
   })
 
