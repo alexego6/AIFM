@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const MONTHS = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
 
@@ -30,9 +30,16 @@ function buildingShortName(name) {
   return name.slice(0, 18)
 }
 
-export default function TZScheduleView({ systemsData, buildings, defaultMode = 'TO' }) {
+export default function TZScheduleView({ systemsData, buildings, defaultMode = 'TO', lockMode = false, hideBuildingSwitcher = false }) {
   const [selectedBuildingId, setSelectedBuildingId] = useState(buildings[0]?.id ?? null)
   const [selectedMode, setSelectedMode] = useState(defaultMode)
+
+  // Sync selected building when buildings prop changes (e.g. header switcher changed activeBuildingId)
+  useEffect(() => {
+    if (buildings.length > 0 && !buildings.find(b => b.id === selectedBuildingId)) {
+      setSelectedBuildingId(buildings[0].id)
+    }
+  }, [buildings])
 
   const buildingSystems = (systemsData.find(b => b.buildingId === selectedBuildingId)?.systems ?? [])
     .filter(s => s.maintenanceTasks?.length > 0)
@@ -59,8 +66,8 @@ export default function TZScheduleView({ systemsData, buildings, defaultMode = '
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-      {/* Building switcher */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {/* Building switcher — скрываем если один объект или платформенный режим */}
+      {!hideBuildingSwitcher && buildings.length > 1 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {buildings.map(b => {
           const active = b.id === selectedBuildingId
           const bSystems = (systemsData.find(x => x.buildingId === b.id)?.systems ?? [])
@@ -91,10 +98,10 @@ export default function TZScheduleView({ systemsData, buildings, defaultMode = '
             </button>
           )
         })}
-      </div>
+      </div>}
 
-      {/* Mode switcher */}
-      <div style={{ display: 'flex', gap: 6 }}>
+      {/* Mode switcher — скрываем если режим зафиксирован */}
+      {!lockMode && <div style={{ display: 'flex', gap: 6 }}>
         {[['TO', 'Техническое обслуживание (ТО)'], ['EK', 'Эксплуатационный контроль (ЭК)']].map(([mode, label]) => (
           <button
             key={mode}
@@ -111,7 +118,7 @@ export default function TZScheduleView({ systemsData, buildings, defaultMode = '
             {label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* Matrix */}
       {buildingSystems.length === 0 ? (

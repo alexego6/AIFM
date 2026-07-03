@@ -72,7 +72,7 @@ export default function ScheduleTO() {
 
       {!hasData ? <EmptyState /> : (
         <div style={{ background: '#FFFFFF', border: '1px solid #E8ECF5', borderRadius: 14, padding: 20 }}>
-          <TZScheduleView systemsData={systems} buildings={buildings} defaultMode="TO" />
+          <TZScheduleView systemsData={systems} buildings={buildings} defaultMode="TO" lockMode hideBuildingSwitcher />
         </div>
       )}
     </div>
