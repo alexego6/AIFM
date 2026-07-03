@@ -50,6 +50,7 @@ export const usePlatformStore = create((set, get) => ({
   systemsData:       [],   // {buildingId, systems[]}[]
   staffingPlan:      [],
   resourcesPlan:     [],
+  slaData:           null,
   activeBuildingId:  null,
   applied:           false,
   appliedAt:         null,
@@ -61,13 +62,14 @@ export const usePlatformStore = create((set, get) => ({
 
   // Called from TZAnalyzer Stage 6 after validation.
   // buildings/systemsData are already mapped through platformAdapter before calling.
-  applyFromTZ: async ({ buildings, systemsData, staffingPlan, resourcesPlan }) => {
+  applyFromTZ: async ({ buildings, systemsData, staffingPlan, resourcesPlan, slaData }) => {
     const cur = get()
     const merged = {
       buildings:    upsertBuildings(cur.buildings, buildings),
       systemsData:  upsertSystemsData(cur.systemsData, systemsData),
       staffingPlan:  staffingPlan  ?? [],
       resourcesPlan: resourcesPlan ?? [],
+      slaData:       slaData       ?? cur.slaData ?? null,
       applied:   true,
       appliedAt: new Date().toISOString(),
       activeBuildingId: cur.activeBuildingId ?? buildings[0]?.id ?? null,
@@ -78,6 +80,7 @@ export const usePlatformStore = create((set, get) => ({
       idb.set('systems_data',       merged.systemsData),
       idb.set('staffing_plan',      merged.staffingPlan),
       idb.set('resources_plan',     merged.resourcesPlan),
+      idb.set('sla_data',           merged.slaData),
       idb.set('applied',            true),
       idb.set('applied_at',         merged.appliedAt),
       idb.set('active_building_id', merged.activeBuildingId),
@@ -86,7 +89,7 @@ export const usePlatformStore = create((set, get) => ({
 
   loadFromDB: async () => {
     const [buildings, systemsData, staffingPlan, resourcesPlan,
-           applied, appliedAt, activeBuildingId] = await Promise.all([
+           applied, appliedAt, activeBuildingId, slaData] = await Promise.all([
       idb.get('buildings'),
       idb.get('systems_data'),
       idb.get('staffing_plan'),
@@ -94,12 +97,14 @@ export const usePlatformStore = create((set, get) => ({
       idb.get('applied'),
       idb.get('applied_at'),
       idb.get('active_building_id'),
+      idb.get('sla_data'),
     ])
     const patch = {}
     if (buildings?.length)    patch.buildings         = buildings
     if (systemsData?.length)  patch.systemsData       = systemsData
     if (staffingPlan?.length) patch.staffingPlan      = staffingPlan
     if (resourcesPlan?.length)patch.resourcesPlan     = resourcesPlan
+    if (slaData?.detected)    patch.slaData           = slaData
     if (applied)              patch.applied           = true
     if (appliedAt)            patch.appliedAt         = appliedAt
     if (activeBuildingId)     patch.activeBuildingId  = activeBuildingId
@@ -109,7 +114,7 @@ export const usePlatformStore = create((set, get) => ({
   reset: async () => {
     set({
       buildings: [], systemsData: [], staffingPlan: [], resourcesPlan: [],
-      activeBuildingId: null, applied: false, appliedAt: null,
+      slaData: null, activeBuildingId: null, applied: false, appliedAt: null,
     })
     await idb.clear()
   },

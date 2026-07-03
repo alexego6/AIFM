@@ -76,6 +76,9 @@ export const useTZStore = create((set) => ({
   staffingPlan: [],      // StaffingPlanEntry[] — persisted in IDB
   resourcesPlan: [],     // ResourcesPlanEntry[] — persisted in IDB
 
+  // SLA: данные из документа (распарсено при Stage 0, если SLA найден в HTML)
+  slaData: null,         // { detected, constraints, matrix } | null
+
   // ── действия ─────────────────────────────────────────────────────────────
   setFile: async (name, size) => {
     set({ fileName: name, fileSize: size })
@@ -131,6 +134,11 @@ export const useTZStore = create((set) => ({
     await idb.set('resources_plan', plans)
   },
 
+  setSlaData: async (data) => {
+    set({ slaData: data })
+    await idb.set('sla_data', data)
+  },
+
   // Persist a confirmed stage (4+) so loadFromDB can restore it after reload.
   // Only call for manual user confirmations, not for running/error states.
   confirmStage: async (stageNum) => {
@@ -145,8 +153,8 @@ export const useTZStore = create((set) => ({
       buildings: [], systems: [],
       scheduleStatus: 'unknown', scheduleTableCount: 0,
       scheduleTables: null, htmlContent: null,
-      staffingPlan: [],
-      resourcesPlan: [],
+      staffingPlan: [], resourcesPlan: [],
+      slaData: null,
     })
     await idb.clear()
   },
@@ -158,7 +166,7 @@ export const useTZStore = create((set) => ({
 
   // Восстановить прогресс при монтировании
   loadFromDB: async () => {
-    const [chunks, buildings, systems, meta, schedData, schedTables, html, confirmedStage, staffingPlan, resourcesPlan] = await Promise.all([
+    const [chunks, buildings, systems, meta, schedData, schedTables, html, confirmedStage, staffingPlan, resourcesPlan, slaData] = await Promise.all([
       idb.get('chunks'),
       idb.get('buildings'),
       idb.get('systems'),
@@ -169,6 +177,7 @@ export const useTZStore = create((set) => ({
       idb.get('confirmed_stage'),
       idb.get('staffing_plan'),
       idb.get('resources_plan'),
+      idb.get('sla_data'),
     ])
     const patch = {}
     if (meta)              { patch.fileName = meta.fileName; patch.fileSize = meta.fileSize }
@@ -203,6 +212,7 @@ export const useTZStore = create((set) => ({
     }
     if (staffingPlan?.length)  { patch.staffingPlan  = staffingPlan }
     if (resourcesPlan?.length) { patch.resourcesPlan = resourcesPlan }
+    if (slaData?.detected)     { patch.slaData       = slaData }
 
     if (Object.keys(patch).length) set(patch)
   },

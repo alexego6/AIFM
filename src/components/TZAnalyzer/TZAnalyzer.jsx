@@ -4,6 +4,7 @@ import { usePlatformStore } from '../../store/usePlatformStore'
 import { parseFile, parseDocxHtml } from '../../services/docParser'
 import { chunkByHeadings } from '../../services/chunkText'
 import { runStage1, runStage2, detectSchedule, parseScheduleTables, runStage3 } from '../../services/tzPipeline'
+import { parseSlaTables } from '../../services/slaParser'
 import { calcAllStaffing } from '../../services/staffingHeuristic'
 import { calcAllResources } from '../../services/resourcesHeuristic'
 import { validateTZForApply, mapBuildings, mapSystemsData } from '../../services/platformAdapter'
@@ -118,8 +119,9 @@ export default function TZAnalyzer() {
     chunks, stage, stageStatus, stageError,
     buildings, systems, staffingPlan, resourcesPlan,
     scheduleStatus, scheduleTableCount, scheduleTables, htmlContent,
+    slaData,
     setFile, setChunks, setParseWarnings, setStage, setBuildings, setSystems,
-    setHtmlContent, setScheduleStatus, setScheduleTables, confirmStage, setStaffingPlan, setResourcesPlan,
+    setHtmlContent, setScheduleStatus, setScheduleTables, setSlaData, confirmStage, setStaffingPlan, setResourcesPlan,
     reset, loadFromDB,
     tzPendingFile, clearTzPendingFile,
   } = useTZStore()
@@ -168,6 +170,8 @@ export default function TZAnalyzer() {
           const tables = parseScheduleTables(html)
           await setScheduleTables(tables)
         }
+        const slaResult = parseSlaTables(html)
+        if (slaResult.detected) await setSlaData(slaResult)
       } else {
         await setScheduleStatus('not_found', 0)
       }
@@ -641,6 +645,7 @@ export default function TZAnalyzer() {
                     systemsData:  mapSystemsData(systems),
                     staffingPlan,
                     resourcesPlan,
+                    slaData,
                   })
                   await confirmStage(6)
                   setActiveSection('dashboard')
@@ -728,6 +733,7 @@ export default function TZAnalyzer() {
                 systemsData:  mapSystemsData(systems),
                 staffingPlan,
                 resourcesPlan,
+                slaData,
               })
             } finally {
               setApplyRunning(false)

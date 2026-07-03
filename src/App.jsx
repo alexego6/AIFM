@@ -5,6 +5,7 @@ import BIMViewer from './components/BIMViewer/BIMViewer'
 import ScheduleEK from './components/ScheduleEK/ScheduleEK'
 import ScheduleTO from './components/ScheduleTO/ScheduleTO'
 import WearPrediction from './components/WearPrediction/WearPrediction'
+import SLA from './components/SLA/SLA'
 import Tickets from './components/Tickets/Tickets'
 import Dashboard from './components/Dashboard/Dashboard'
 import TZAnalyzer from './components/TZAnalyzer/TZAnalyzer'
@@ -18,6 +19,7 @@ const SECTION_LABELS = {
   'bim':          'BIM-просмотр',
   'schedule-ek':  'График ЭК',
   'schedule-to':  'График ТО',
+  'sla':          'SLA',
   'wear':         'Прогноз износа',
   'tickets':      'Тикеты',
   'dashboard':    'Дашборд',
@@ -69,6 +71,7 @@ export default function App() {
       case 'building':     return <BuildingView />
       case 'schedule-ek':  return <ScheduleEK />
       case 'schedule-to':  return <ScheduleTO />
+      case 'sla':          return <SLA />
       case 'wear':         return <WearPrediction />
       case 'tickets':      return <Tickets />
       case 'dashboard':    return <Dashboard />
