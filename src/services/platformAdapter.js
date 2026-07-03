@@ -141,7 +141,8 @@ export function systemsDistribution(buildingSystemsData) {
   const items = []
   for (const s of buildingSystemsData?.systems ?? []) {
     const eqCount = (s.equipment ?? []).reduce((acc, eq) => acc + (eq.qty ?? 1), 0)
-    items.push({ code: s.systemCode ?? '—', name: s.systemName ?? '—', eqCount })
+    const name = s.name ?? s.systemName ?? '—'
+    items.push({ code: name, name, eqCount })
   }
   return items
 }
