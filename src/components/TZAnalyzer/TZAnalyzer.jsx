@@ -713,6 +713,96 @@ export default function TZAnalyzer() {
           </div>
         )}
 
+        {/* Этап 6 — done-экран: данные применены, доступно повторное применение */}
+        {stage === 6 && stageStatus === 'done' && (() => {
+          const totalSystems = systems.reduce((n, b) => n + (b.systems?.length ?? 0), 0)
+          const totalTasks   = systems.reduce((n, b) => n + (b.systems ?? []).reduce((m, s) => m + (s.maintenanceTasks?.length ?? 0), 0), 0)
+          const validation   = validateTZForApply({ buildings, systems, staffingPlan, resourcesPlan })
+
+          async function handleReApply() {
+            if (applyRunning || !validation.ok) return
+            setApplyRunning(true)
+            try {
+              await applyFromTZ({
+                buildings:    mapBuildings(buildings),
+                systemsData:  mapSystemsData(systems),
+                staffingPlan,
+                resourcesPlan,
+              })
+            } finally {
+              setApplyRunning(false)
+            }
+          }
+
+          return (
+            <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Applied status banner */}
+              <div style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: '#059669' }}>Применено из ТЗ</div>
+                  {appliedAt && <div style={{ fontSize: 12, color: '#6EE7B7', marginTop: 2 }}>{new Date(appliedAt).toLocaleString('ru-RU')}</div>}
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div style={{ display: 'flex', gap: 24, fontSize: 13, color: '#374151', flexWrap: 'wrap' }}>
+                <span>Объектов: <strong>{buildings.length}</strong></span>
+                <span>Систем: <strong>{totalSystems}</strong></span>
+                <span>Задач ТО/ЭК: <strong>{totalTasks}</strong></span>
+                {staffingPlan.length > 0 && <span>Штат: <strong>{staffingPlan.length} объектов</strong></span>}
+              </div>
+
+              {/* Validation errors blocking re-apply */}
+              {!validation.ok && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {validation.errors.map((e, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#B91C1C', display: 'flex', gap: 6 }}>
+                      <span>✗</span><span>{e}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleReApply}
+                  disabled={!validation.ok || applyRunning}
+                  style={{
+                    padding: '10px 22px', borderRadius: 10, border: 'none',
+                    background: validation.ok ? '#1D4ED8' : '#E2E8F0',
+                    color: validation.ok ? '#FFFFFF' : '#94A3B8',
+                    fontSize: 14, fontWeight: 600,
+                    cursor: validation.ok && !applyRunning ? 'pointer' : 'not-allowed',
+                    fontFamily: "'Golos Text',system-ui,sans-serif",
+                    opacity: applyRunning ? 0.7 : 1,
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}
+                >
+                  {applyRunning && (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'spin 1s linear infinite' }}>
+                      <path d="M21 12a9 9 0 1 1-6-8.5"/>
+                    </svg>
+                  )}
+                  {applyRunning ? 'Применяется…' : '↻ Применить повторно'}
+                </button>
+                <button
+                  onClick={() => setActiveSection('dashboard')}
+                  style={{
+                    padding: '10px 22px', borderRadius: 10, border: '1px solid #A7F3D0',
+                    background: '#F0FDF4', color: '#059669',
+                    fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                    fontFamily: "'Golos Text',system-ui,sans-serif",
+                  }}
+                >
+                  Открыть Дашборд →
+                </button>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Этап 3 — стаб: график не найден */}
         {stage === 3 && stageStatus === 'no_schedule' && (
           <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
