@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { TICKETS } from '../../data/tickets'
 import { SYSTEMS } from '../../data/building'
+import { usePlatformStore } from '../../store/usePlatformStore'
 
 const TODAY = new Date('2026-06-22')
 
@@ -100,8 +101,38 @@ const PlusIcon = () => (
   </svg>
 )
 
+function TicketsDevStub() {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', padding:24, gap:18, background:'#F3F5FA' }}>
+      <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', flexShrink:0 }}>
+        <div>
+          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Тикеты</h1>
+          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>Заявки на обслуживание, ремонт и устранение замечаний</p>
+        </div>
+        <button disabled style={{ display:'flex', alignItems:'center', gap:7, padding:'11px 18px', borderRadius:10, fontSize:13, fontWeight:600, color:'#94A3B8', border:'none', cursor:'not-allowed', fontFamily:'inherit', background:'#E2E8F0' }}>
+          <PlusIcon/>Новый тикет
+        </button>
+      </div>
+      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ textAlign:'center', maxWidth:400, display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
+            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <div style={{ fontSize:15, fontWeight:600, color:'#94A3B8' }}>Тикеты в разработке</div>
+          <div style={{ fontSize:13, color:'#CBD5E1', lineHeight:1.6 }}>
+            Тикеты будут генерироваться из графиков ЭК/ТО с учётом SLA — раздел в разработке
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Tickets() {
+  const { applied } = usePlatformStore()
   const [activeTab, setActiveTab] = useState('all')
+
+  if (applied) return <TicketsDevStub />
 
   const counts = useMemo(() => ({
     all:         TICKETS.length,
