@@ -239,10 +239,11 @@ function IsometricBuilding({ onFloorClick, hoveredFloor }) {
 export default function BuildingView() {
   const [selectedFloor, setSelectedFloor] = useState(null)
   const [hoveredFloor, setHoveredFloor]   = useState(null)
-  // Начинаем в режиме плана БТИ; «К зданию» переключает обратно на изометрию
-  const [showBTI, setShowBTI]             = useState(true)
   const { btiPlanImage, btiPendingFile } = useAppStore()
   const { applied } = usePlatformStore()
+  // When applied: start on the stub; user opens BTI via explicit button.
+  // When !applied: start on BTI viewer (normal demo mode).
+  const [showBTI, setShowBTI]             = useState(!applied)
 
   // Если пришёл файл через глобальный дроп — открыть BTI
   useEffect(() => {
