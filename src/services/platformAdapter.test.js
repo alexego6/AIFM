@@ -202,3 +202,102 @@ describe('validateTZForApply — полнота данных', () => {
     expect(result.warnings.some(w => w.includes('Корпус 2'))).toBe(true)
   })
 })
+
+// ── Test C: mapSystemsData field mapping ──────────────────────────────────────
+
+describe('mapSystemsData — корректное копирование полей TZ-систем', () => {
+  const tzInput = [{
+    buildingId: 'b1',
+    systems: [{
+      id:          'b1-hvac-1',
+      name:        'Вентиляция и кондиционирование',
+      category:    'hvac',
+      needsReview: true,
+      maintenanceTasks: [{
+        opNum: '2.1', mode: 'TO', operation: 'Замена фильтра',
+        periodicity: 'ежеквартально', months: [3, 6, 9, 12],
+      }],
+      equipment: [{
+        name: 'Вентагрегат АО-1', class: 'fan', brand: 'Веза', qty: 2,
+        provenance: 'Таблица 3', needsReview: false,
+      }],
+    }],
+  }]
+
+  it('system.name и system.systemName присутствуют и совпадают', () => {
+    const [result] = mapSystemsData(tzInput)
+    const sys = result.systems[0]
+    expect(sys.name).toBe('Вентиляция и кондиционирование')
+    expect(sys.systemName).toBe('Вентиляция и кондиционирование')
+  })
+
+  it('system.category сохраняется', () => {
+    const [result] = mapSystemsData(tzInput)
+    expect(result.systems[0].category).toBe('hvac')
+  })
+
+  it('system.needsReview сохраняется', () => {
+    const [result] = mapSystemsData(tzInput)
+    expect(result.systems[0].needsReview).toBe(true)
+  })
+
+  it('task.periodicity и task.months сохраняются', () => {
+    const [result] = mapSystemsData(tzInput)
+    const task = result.systems[0].maintenanceTasks[0]
+    expect(task.periodicity).toBe('ежеквартально')
+    expect(task.months).toEqual([3, 6, 9, 12])
+    expect(task.mode).toBe('TO')
+  })
+
+  it('task.id — уникальный контент-хэш, не коллизия при одном buildingId', () => {
+    const multiSys = [{
+      buildingId: 'b1',
+      systems: [
+        { id: 'b1-hvac-1', name: 'Вентиляция', category: 'hvac', needsReview: false,
+          maintenanceTasks: [{ opNum: '1', mode: 'TO', operation: 'Осмотр', periodicity: 'monthly', months: [1] }], equipment: [] },
+        { id: 'b1-heating-1', name: 'Теплоснабжение', category: 'heating', needsReview: false,
+          maintenanceTasks: [{ opNum: '1', mode: 'TO', operation: 'Осмотр', periodicity: 'monthly', months: [1] }], equipment: [] },
+      ],
+    }]
+    const [result] = mapSystemsData(multiSys)
+    const ids = result.systems.map(s => s.id)
+    expect(new Set(ids).size).toBe(2) // no collision
+  })
+
+  it('equipment.provenance сохраняется', () => {
+    const [result] = mapSystemsData(tzInput)
+    const eq = result.systems[0].equipment[0]
+    expect(eq.provenance).toBe('Таблица 3')
+    expect(eq.name).toBe('Вентагрегат АО-1')
+    expect(eq.qty).toBe(2)
+  })
+})
+
+// ── Test D: seed fixture integrity ────────────────────────────────────────────
+
+describe('mapSystemsData — интеграция с seed-фикстурой', () => {
+  it('все 5 зданий имеют системы с непустыми категориями', async () => {
+    const { seedFixture } = await import('./seedPlatform.fixture.js')
+    const { systemsData } = seedFixture
+    expect(systemsData).toHaveLength(5)
+    for (const b of systemsData) {
+      expect(b.systems.length).toBeGreaterThan(0)
+      // хотя бы часть систем не "Прочее" (не все в other)
+      const nonOther = b.systems.filter(s => s.category !== 'other')
+      expect(nonOther.length).toBeGreaterThan(0)
+      for (const s of b.systems) {
+        expect(s.name).toBeTruthy()
+        expect(s.systemName).toBeTruthy()
+      }
+    }
+  })
+
+  it('есть задачи TO и EK', async () => {
+    const { seedFixture } = await import('./seedPlatform.fixture.js')
+    const allTasks = seedFixture.systemsData.flatMap(b => b.systems.flatMap(s => s.maintenanceTasks ?? []))
+    const modes = new Set(allTasks.map(t => t.mode))
+    expect(modes.has('TO')).toBe(true)
+    expect(modes.has('EK')).toBe(true)
+    expect(allTasks.length).toBeGreaterThan(100)
+  })
+})

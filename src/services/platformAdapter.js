@@ -27,34 +27,45 @@ export function mapBuildings(tzBuildings, now = new Date().toISOString()) {
 }
 
 // ── Systems + tasks + equipment (with content-hash IDs) ───────────────────────
+// TZ system fields: id, name, category, needsReview, maintenanceTasks, equipment
+// Platform system adds: systemName (alias for name), stable content-hash id
 export function mapSystemsData(tzSystems, now = new Date().toISOString()) {
   return (tzSystems ?? []).map(s => ({
     buildingId: s.buildingId,
-    systems: (s.systems ?? []).map(sys => ({
-      id: contentHash(`${s.buildingId}|${sys.systemCode ?? ''}|${sys.systemName ?? ''}`),
-      systemCode: sys.systemCode  ?? null,
-      systemName: sys.systemName  ?? null,
-      maintenanceTasks: (sys.maintenanceTasks ?? []).map(t => ({
-        id:          contentHash(`${s.buildingId}|${sys.systemCode ?? ''}|${t.operation ?? ''}|${t.mode ?? ''}`),
-        mode:        t.mode      ?? null,
-        operation:   t.operation ?? null,
-        opNum:       t.opNum     ?? null,
-        months:      t.months    ?? [],
-        needsReview: false,
-        editedByUser: false,
-      })),
-      equipment: (sys.equipment ?? []).map(eq => ({
-        id:          contentHash(`${s.buildingId}|${sys.systemCode ?? ''}|${eq.name ?? ''}|${eq.class ?? ''}`),
-        name:        eq.name   ?? null,
-        class:       eq.class  ?? null,
-        brand:       eq.brand  ?? null,
-        qty:         eq.qty    ?? null,
-        tag:         eq.tag    ?? null,
-        needsReview: false,
-        editedByUser: false,
-      })),
-      appliedAt: now,
-    })),
+    systems: (s.systems ?? []).map(sys => {
+      const sysName     = sys.name     ?? sys.systemName ?? ''
+      const sysCat      = sys.category ?? 'other'
+      const sysId       = contentHash(`${s.buildingId}|${sysCat}|${sysName}`)
+      return {
+        id:          sysId,
+        name:        sysName,        // used by TZScheduleView
+        systemName:  sysName,        // used by Dashboard systemsDistribution
+        category:    sysCat,
+        needsReview: sys.needsReview ?? false,
+        maintenanceTasks: (sys.maintenanceTasks ?? []).map(t => ({
+          id:          contentHash(`${s.buildingId}|${sysCat}|${t.operation ?? ''}|${t.mode ?? ''}`),
+          mode:        t.mode        ?? null,
+          operation:   t.operation   ?? null,
+          opNum:       t.opNum       ?? null,
+          periodicity: t.periodicity ?? null,
+          months:      t.months      ?? [],
+          needsReview:  false,
+          editedByUser: false,
+        })),
+        equipment: (sys.equipment ?? []).map(eq => ({
+          id:          contentHash(`${s.buildingId}|${sysCat}|${eq.name ?? ''}|${eq.class ?? ''}`),
+          name:        eq.name      ?? null,
+          class:       eq.class     ?? null,
+          brand:       eq.brand     ?? null,
+          qty:         eq.qty       ?? null,
+          tag:         eq.tag       ?? null,
+          provenance:  eq.provenance ?? null,
+          needsReview:  eq.needsReview  ?? false,
+          editedByUser: false,
+        })),
+        appliedAt: now,
+      }
+    }),
   }))
 }
 
