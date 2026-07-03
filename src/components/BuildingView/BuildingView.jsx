@@ -241,13 +241,16 @@ export default function BuildingView() {
   const [hoveredFloor, setHoveredFloor]   = useState(null)
   const { btiPlanImage, btiPendingFile } = useAppStore()
   const { applied } = usePlatformStore()
-  // When applied: start on the stub; user opens BTI via explicit button.
-  // When !applied: start on BTI viewer (normal demo mode).
-  const [showBTI, setShowBTI]             = useState(!applied)
+  // null = not manually set; derive from applied.
+  // applied=false (demo): show BTI by default.
+  // applied=true: show stub by default; BTI only via explicit button.
+  // This handles the async IDB load correctly: applied changes after mount.
+  const [btiManual, setBtiManual] = useState(null)
+  const showBTI = btiManual !== null ? btiManual : !applied
 
   // Если пришёл файл через глобальный дроп — открыть BTI
   useEffect(() => {
-    if (btiPendingFile) setShowBTI(true)
+    if (btiPendingFile) setBtiManual(true)
   }, [btiPendingFile])
 
   const floorStats = useMemo(() =>
@@ -262,7 +265,7 @@ export default function BuildingView() {
   if (showBTI) {
     return (
       <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', background:'#F3F5FA', position:'relative' }}>
-        <BTIRecognizer onClose={() => setShowBTI(false)} />
+        <BTIRecognizer onClose={() => setBtiManual(false)} />
       </div>
     )
   }
@@ -277,7 +280,7 @@ export default function BuildingView() {
         </div>
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12 }}>
           {/* BTI доступен всегда — это загруженный пользователем файл */}
-          <button onClick={() => setShowBTI(true)} style={{
+          <button onClick={() => setBtiManual(true)} style={{
             alignSelf:'flex-start', display:'flex', alignItems:'center', gap:10,
             background: btiPlanImage ? 'linear-gradient(135deg,#F0FDF4,#ECFDF5)' : 'linear-gradient(135deg,#EEF2FF,#F5F3FF)',
             border:`1.5px dashed ${btiPlanImage ? '#6EE7B7' : '#A5B4FC'}`, borderRadius:14, padding:'12px 16px',
@@ -364,7 +367,7 @@ export default function BuildingView() {
       {/* Right: floor list */}
       <div style={{ width:258, flex:'none', display:'flex', flexDirection:'column', gap:10, justifyContent:'center' }}>
         {/* BTI button */}
-        <button onClick={() => setShowBTI(true)} style={{
+        <button onClick={() => setBtiManual(true)} style={{
           display:'flex', alignItems:'center', gap:10,
           background: btiPlanImage ? 'linear-gradient(135deg,#F0FDF4,#ECFDF5)' : 'linear-gradient(135deg,#EEF2FF,#F5F3FF)',
           border:`1.5px dashed ${btiPlanImage ? '#6EE7B7' : '#A5B4FC'}`, borderRadius:14, padding:'12px 16px',

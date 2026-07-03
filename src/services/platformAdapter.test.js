@@ -301,3 +301,78 @@ describe('mapSystemsData — интеграция с seed-фикстурой', (
     expect(allTasks.length).toBeGreaterThan(100)
   })
 })
+
+// ── Test E: stale-IDB → re-apply replaces, no duplicates ─────────────────────
+
+describe('upsertSystemsData — стейл-записи со старыми ID', () => {
+  it('стейл-записи (старые ID) замещаются целиком, без дублей', () => {
+    // Stale records as stored by the OLD mapSystemsData (before the fix):
+    // systemCode/systemName were undefined → IDs computed as contentHash('b1||')
+    // All systems in the same building got the SAME hash → stale data is broken.
+    // After re-apply, incoming replaces the whole systems set per building.
+    const staleEntry = {
+      buildingId: 'b1',
+      systems: [
+        // 3 entries with the same stale ID pattern (systemCode='', systemName='')
+        { id: 'stale-id-1', systemCode: null, systemName: null, category: 'other',
+          name: '', maintenanceTasks: [], equipment: [] },
+        { id: 'stale-id-1', systemCode: null, systemName: null, category: 'other',
+          name: '', maintenanceTasks: [], equipment: [] },
+      ],
+    }
+
+    const tzInput = [{
+      buildingId: 'b1',
+      systems: [
+        { id: 'b1-hvac-1', name: 'Вентиляция', category: 'hvac', needsReview: false,
+          maintenanceTasks: [{ opNum: '1', mode: 'TO', operation: 'Осмотр', periodicity: 'monthly', months: [1] }],
+          equipment: [] },
+        { id: 'b1-elec-1', name: 'Электрика', category: 'electrical', needsReview: false,
+          maintenanceTasks: [{ opNum: '1', mode: 'EK', operation: 'Замер', periodicity: 'quarterly', months: [3, 6, 9, 12] }],
+          equipment: [] },
+      ],
+    }]
+
+    const fresh = mapSystemsData(tzInput)
+    const result = upsertSystemsData([staleEntry], fresh)
+
+    // Result contains exactly 1 building entry
+    expect(result).toHaveLength(1)
+    const b1 = result[0]
+
+    // Contains exactly the 2 fresh systems (not 4 = stale 2 + fresh 2)
+    expect(b1.systems).toHaveLength(2)
+
+    // Old stale IDs are gone
+    const ids = b1.systems.map(s => s.id)
+    expect(ids).not.toContain('stale-id-1')
+
+    // Fresh categories are correct (not 'other' from stale)
+    const cats = b1.systems.map(s => s.category)
+    expect(cats).toContain('hvac')
+    expect(cats).toContain('electrical')
+    expect(cats).not.toContain('other')
+
+    // Fresh names are correct (not empty string from stale)
+    const names = b1.systems.map(s => s.name)
+    expect(names).toContain('Вентиляция')
+    expect(names).toContain('Электрика')
+  })
+
+  it('при стейл-данных без правок re-apply полностью замещает, задачи не needsReview', () => {
+    const staleEntry = {
+      buildingId: 'b1',
+      systems: [{ id: 'stale', systemCode: null, systemName: null, category: 'other',
+        name: '', maintenanceTasks: [], equipment: [] }],
+    }
+    const fresh = mapSystemsData([{
+      buildingId: 'b1',
+      systems: [{ id: 'new', name: 'HVAC', category: 'hvac', needsReview: false,
+        maintenanceTasks: [{ opNum: '1', mode: 'TO', operation: 'Осмотр', periodicity: 'monthly', months: [1] }],
+        equipment: [] }],
+    }])
+    const result = upsertSystemsData([staleEntry], fresh)
+    expect(result[0].systems).toHaveLength(1)
+    expect(result[0].systems[0].maintenanceTasks[0].needsReview).toBe(false)
+  })
+})
