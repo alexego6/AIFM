@@ -9,7 +9,7 @@ import {
 } from '../../services/platformAdapter'
 import StaffPanel from './StaffPanel'
 
-const TODAY = new Date('2026-06-22')
+const TODAY = new Date()
 const CURRENT_MONTH = TODAY.getMonth() // 0-based
 
 const MONTH_LABELS = ['Я','Ф','М','А','М','И','И','А','С','О','Н','Д']

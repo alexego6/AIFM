@@ -1,7 +1,7 @@
 import { useAppStore } from '../../store/useAppStore'
 import { TICKETS } from '../../data/tickets'
 
-const TODAY = new Date('2026-06-22')
+const TODAY = new Date()
 const openCount = TICKETS.filter(t => t.status !== 'done' && new Date(t.due) <= TODAY).length
 
 // Разделы, недоступные когда загружена BIM-модель
