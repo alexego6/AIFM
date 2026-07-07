@@ -76,7 +76,7 @@ export function planDay(tickets, staff, date) {
       out.push(t)
       continue
     }
-    let person = null
+    let person
     if (weekend) {
       person = watchman ?? null
     } else if (t.type === 'EK') {

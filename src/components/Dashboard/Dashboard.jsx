@@ -7,6 +7,7 @@ import { usePlatformStore } from '../../store/usePlatformStore'
 import {
   tasksPerMonth, tasksThisMonth, totalEquipmentUnits, systemsDistribution,
 } from '../../services/platformAdapter'
+import StaffPanel from './StaffPanel'
 
 const TODAY = new Date('2026-06-22')
 const CURRENT_MONTH = TODAY.getMonth() // 0-based
@@ -58,7 +59,7 @@ const DASH_KPIS_ICONS = {
 }
 
 // ── Platform-data dashboard ──────────────────────────────────────────────────
-function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, appliedAt, buildingName }) {
+function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, appliedAt, buildingName, buildingId }) {
   const sysDist = useMemo(() => systemsDistribution(buildingData), [buildingData])
   const monthCounts = useMemo(() => tasksPerMonth(buildingData), [buildingData])
   const eqTotal  = useMemo(() => totalEquipmentUnits(buildingData), [buildingData])
@@ -231,6 +232,9 @@ function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, applie
           )}
         </div>
       </div>
+
+      {/* Row 4: реестр исполнителей */}
+      <StaffPanel buildingId={buildingId} />
     </div>
   )
 }
@@ -407,6 +411,7 @@ export default function Dashboard() {
             resourcesEntry={resourcesEntry}
             appliedAt={appliedAt}
             buildingName={buildingName}
+            buildingId={activeBuildingId ?? buildings[0]?.id ?? null}
           />
         : <MockDashboard />
       }

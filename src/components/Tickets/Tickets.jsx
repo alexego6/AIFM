@@ -1,197 +1,339 @@
-import { useState, useMemo } from 'react'
-import { TICKETS } from '../../data/tickets'
-import { SYSTEMS } from '../../data/building'
+// Тикеты — дневной наряд активного объекта.
+// Генерация из графиков ЭК/ТО платформы (день по хэшу, см. dayScheduler),
+// раскладка по исполнителям (ticketPlanner), аварийные заявки с SLA-таймером.
+// Никаких моков: без применённого ТЗ — честная заглушка.
+
+import { useEffect, useMemo, useState } from 'react'
 import { usePlatformStore } from '../../store/usePlatformStore'
+import { useStaffStore } from '../../store/useStaffStore'
+import { useTicketsStore } from '../../store/useTicketsStore'
+import { toISODate } from '../../services/dayScheduler'
 
-const TODAY = new Date('2026-06-22')
-
-function isOverdue(t) {
-  return t.status !== 'done' && new Date(t.due) < TODAY
+const TYPE_CFG = {
+  EK:        { label: 'ЭК',     color: '#059669', bg: 'rgba(5,150,105,.1)' },
+  TO:        { label: 'ТО',     color: '#1D4ED8', bg: 'rgba(29,78,216,.1)' },
+  emergency: { label: 'Авария', color: '#DC2626', bg: 'rgba(220,38,38,.1)' },
 }
 
 const STATUS_CFG = {
-  open:        { label:'Новый',     color:'#6B7280', bg:'rgba(107,114,128,.1)' },
-  in_progress: { label:'В работе',  color:'#1D4ED8', bg:'rgba(29,78,216,.1)' },
-  done:        { label:'Выполнен',  color:'#059669', bg:'rgba(5,150,105,.1)' },
-  overdue:     { label:'Просрочен', color:'#DC2626', bg:'rgba(220,38,38,.1)' },
+  open:        { label: 'Открыт',   color: '#6B7280', bg: 'rgba(107,114,128,.1)', next: 'in_progress' },
+  in_progress: { label: 'В работе', color: '#1D4ED8', bg: 'rgba(29,78,216,.1)',   next: 'done' },
+  done:        { label: 'Закрыт',   color: '#059669', bg: 'rgba(5,150,105,.1)',   next: 'open' },
 }
 
-const PRIORITY_COLOR = {
-  critical: '#DC2626',
-  high:     '#D97706',
-  medium:   '#D97706',
-  low:      '#059669',
+function fmtCountdown(deadline, now) {
+  const ms = new Date(deadline) - now
+  const abs = Math.abs(ms)
+  const h = Math.floor(abs / 3_600_000)
+  const m = Math.floor((abs % 3_600_000) / 60_000)
+  const str = h > 0 ? `${h} ч ${m} мин` : `${m} мин`
+  return ms >= 0 ? `осталось ${str}` : `просрочен на ${str}`
 }
 
-const TAB_FILTERS = [
-  { key:'all',         label:'Все' },
-  { key:'open',        label:'Новые' },
-  { key:'in_progress', label:'В работе' },
-  { key:'done',        label:'Выполнены' },
-  { key:'overdue',     label:'Просрочены' },
-]
-
-function fmtDate(d) {
-  return new Date(d).toLocaleDateString('ru-RU', { day:'numeric', month:'long' })
+function SlaTimer({ ticket }) {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+  if (ticket.status === 'done') return null
+  const overdue = new Date(ticket.slaDeadline) < now
+  return (
+    <div style={{ fontSize: 11, fontWeight: 600, color: overdue ? '#DC2626' : '#D97706',
+      display: 'flex', alignItems: 'center', gap: 5 }}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
+      SLA: {fmtCountdown(ticket.slaDeadline, now)}
+      {ticket.slaNote && <span style={{ fontWeight: 400, color: '#9CA3AF' }}>({ticket.slaNote})</span>}
+    </div>
+  )
 }
 
-function avatarInitials(name) {
-  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-}
-
-const CalIcon = ({ overdue }) => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={overdue ? '#DC2626' : '#9CA3AF'} strokeWidth="2">
-    <rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
-  </svg>
-)
-
-function TicketCard({ ticket, idx }) {
-  const overdue   = isOverdue(ticket)
-  const statusKey = overdue ? 'overdue' : ticket.status
-  const s   = STATUS_CFG[statusKey]
-  const sys = SYSTEMS[ticket.system]
-  const stripe = PRIORITY_COLOR[ticket.priority] || '#9CA3AF'
+function TicketCard({ ticket, staffList, staleSystem, onStatus, onReassign }) {
+  const type = TYPE_CFG[ticket.type] ?? TYPE_CFG.TO
+  const st   = STATUS_CFG[ticket.status] ?? STATUS_CFG.open
 
   return (
-    <div style={{ display:'flex', alignItems:'stretch', borderRadius:12, border:'1px solid #E8ECF5', background:'#FFFFFF', overflow:'hidden', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', transition:'border-color .15s' }}
-      onMouseEnter={e => e.currentTarget.style.borderColor='#C7D2FE'}
-      onMouseLeave={e => e.currentTarget.style.borderColor='#E8ECF5'}
-    >
-      <div style={{ width:4, flexShrink:0, background:stripe }}/>
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', flex:1, minWidth:0 }}>
-
-        {/* ID + status */}
-        <div style={{ flexShrink:0, width:130 }}>
-          <div style={{ fontSize:10, color:'#9CA3AF', fontFamily:"'JetBrains Mono',monospace", marginBottom:5 }}>
-            #AIFM-{String(idx + 1).padStart(4, '0')}
-          </div>
-          <span style={{ padding:'3px 10px', borderRadius:6, fontSize:11, fontWeight:600, background:s.bg, color:s.color }}>{s.label}</span>
+    <div style={{ display: 'flex', alignItems: 'stretch', borderRadius: 10, border: '1px solid #E8ECF5',
+      background: '#FFFFFF', overflow: 'hidden', opacity: ticket.status === 'done' ? .65 : 1 }}>
+      <div style={{ width: 3, flexShrink: 0, background: type.color }} />
+      <div style={{ flex: 1, minWidth: 0, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {ticket.order != null && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#9CA3AF', fontFamily: "'JetBrains Mono',monospace", flexShrink: 0 }}>
+              {ticket.order}.
+            </span>
+          )}
+          <span style={{ padding: '2px 8px', borderRadius: 5, fontSize: 10, fontWeight: 700, background: type.bg, color: type.color, flexShrink: 0 }}>
+            {type.label}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#0D1117', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {ticket.title}
+          </span>
+          {ticket.needsReview && (
+            <span style={{ fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#FEF3C7', color: '#92400E', flexShrink: 0 }}>
+              Требует проверки
+            </span>
+          )}
         </div>
 
-        {/* Title + equipment */}
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ fontSize:13, fontWeight:600, color:'#0D1117', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ticket.title}</div>
-          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4 }}>
-            <span style={{ width:7, height:7, borderRadius:'50%', flexShrink:0, background:sys?.color||'#9CA3AF' }}/>
-            <span style={{ fontSize:12, color:'#6B7280', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ticket.equipmentName}</span>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: '#6B7280', flexWrap: 'wrap' }}>
+          <span>{ticket.systemName}</span>
+          {ticket.periodicity && <span style={{ color: '#B4BCC8' }}>· {ticket.periodicity}</span>}
+          {staleSystem && (
+            <span style={{ fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#FEE2E2', color: '#B91C1C' }}>
+              система изменена при переприменении ТЗ
+            </span>
+          )}
         </div>
 
-        {/* Assignee */}
-        <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
-          <div style={{ width:28, height:28, borderRadius:'50%', background:'rgba(29,78,216,.1)', border:'1px solid rgba(29,78,216,.2)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <span style={{ fontSize:9, fontWeight:700, color:'#1D4ED8' }}>{avatarInitials(ticket.assignee)}</span>
-          </div>
-          <span style={{ fontSize:12, color:'#6B7280', whiteSpace:'nowrap' }}>{ticket.assignee}</span>
-        </div>
+        {ticket.type === 'emergency' && <SlaTimer ticket={ticket} />}
 
-        {/* Date */}
-        <div style={{ flexShrink:0, display:'flex', alignItems:'center', gap:5, marginLeft:8 }}>
-          <CalIcon overdue={overdue}/>
-          <span style={{ fontSize:12, color: overdue ? '#DC2626' : '#9CA3AF', fontFamily:"'JetBrains Mono',monospace" }}>{fmtDate(ticket.due)}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button onClick={() => onStatus(ticket.id, st.next)}
+            title={`Перевести в «${STATUS_CFG[st.next].label}»`}
+            style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: st.bg, color: st.color, border: `1px solid ${st.color}33`,
+              cursor: 'pointer', fontFamily: 'inherit' }}>
+            {st.label} →
+          </button>
+          <select
+            value={ticket.assigneeId ?? ''}
+            onChange={e => onReassign(ticket.id, e.target.value || null)}
+            style={{ fontSize: 11, color: '#374151', border: '1px solid #E2E8F0', borderRadius: 6,
+              padding: '3px 6px', background: '#FFFFFF', fontFamily: 'inherit', maxWidth: 190 }}>
+            <option value="">— не назначен —</option>
+            {staffList.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          {ticket.manuallyAssigned && (
+            <span title="Назначен вручную — автораскладка не тронет" style={{ fontSize: 10, color: '#7C3AED' }}>✦ вручную</span>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-const PlusIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-  </svg>
-)
+function EmergencyForm({ systems, onCreate, onClose }) {
+  const [title, setTitle] = useState('')
+  const [systemId, setSystemId] = useState('')
 
-function TicketsDevStub() {
+  function submit() {
+    if (!title.trim()) return
+    const sys = systems.find(s => s.id === systemId)
+    onCreate({ title, systemId: sys?.id ?? null, systemName: sys?.name ?? null, category: sys?.category ?? 'other' })
+    onClose()
+  }
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', padding:24, gap:18, background:'#F3F5FA' }}>
-      <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', flexShrink:0 }}>
-        <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Тикеты</h1>
-          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>Заявки на обслуживание, ремонт и устранение замечаний</p>
-        </div>
-        <button disabled style={{ display:'flex', alignItems:'center', gap:7, padding:'11px 18px', borderRadius:10, fontSize:13, fontWeight:600, color:'#94A3B8', border:'none', cursor:'not-allowed', fontFamily:'inherit', background:'#E2E8F0' }}>
-          <PlusIcon/>Новый тикет
+    <div style={{ background: '#FFF7F7', border: '1px solid #FECACA', borderRadius: 12, padding: 16,
+      display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#B91C1C' }}>Аварийная заявка</div>
+      <input value={title} onChange={e => setTitle(e.target.value)} autoFocus
+        placeholder="Что случилось (например: Прорыв стояка ХВС, 3 этаж)"
+        style={{ fontSize: 13, padding: '9px 12px', borderRadius: 8, border: '1px solid #FECACA', fontFamily: 'inherit', outline: 'none' }} />
+      <select value={systemId} onChange={e => setSystemId(e.target.value)}
+        style={{ fontSize: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid #E2E8F0', fontFamily: 'inherit', background: '#FFF' }}>
+        <option value="">Система (необязательно)</option>
+        {systems.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={submit}
+          style={{ padding: '8px 18px', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#FFF', background: '#DC2626', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+          Создать — SLA-таймер запустится
+        </button>
+        <button onClick={onClose}
+          style={{ padding: '8px 14px', borderRadius: 8, fontSize: 12, color: '#6B7280', background: 'none', border: '1px solid #E2E8F0', cursor: 'pointer', fontFamily: 'inherit' }}>
+          Отмена
         </button>
       </div>
-      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}>
-        <div style={{ textAlign:'center', maxWidth:400, display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
-            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-          </svg>
-          <div style={{ fontSize:15, fontWeight:600, color:'#94A3B8' }}>Тикеты в разработке</div>
-          <div style={{ fontSize:13, color:'#CBD5E1', lineHeight:1.6 }}>
-            Тикеты будут генерироваться из графиков ЭК/ТО с учётом SLA — раздел в разработке
-          </div>
-        </div>
+    </div>
+  )
+}
+
+function NotAppliedStub() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 12, color: '#9CA3AF' }}>
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <div style={{ fontWeight: 600, fontSize: 14, color: '#6B7280' }}>Нет данных платформы</div>
+      <div style={{ fontSize: 12, textAlign: 'center', maxWidth: 320, lineHeight: 1.6 }}>
+        Примените данные из Анализа ТЗ — дневной наряд сгенерируется из графиков ЭК/ТО
       </div>
     </div>
   )
 }
 
 export default function Tickets() {
-  const { applied } = usePlatformStore()
-  const [activeTab, setActiveTab] = useState('all')
+  const { applied, systemsData, activeBuildingId, staffingPlan, slaData } = usePlatformStore()
+  const staffStore   = useStaffStore()
+  const ticketsStore = useTicketsStore()
 
-  if (applied) return <TicketsDevStub />
+  const [dateISO, setDateISO]   = useState(() => toISODate(new Date()))
+  const [typeFilter, setType]   = useState('all')
+  const [statusFilter, setStatus] = useState('all')
+  const [sysFilter, setSys]     = useState('all')
+  const [showEmergency, setShowEmergency] = useState(false)
+  const [genRunning, setGenRunning] = useState(false)
 
-  const counts = useMemo(() => ({
-    all:         TICKETS.length,
-    open:        TICKETS.filter(t => t.status === 'open' && !isOverdue(t)).length,
-    in_progress: TICKETS.filter(t => t.status === 'in_progress').length,
-    done:        TICKETS.filter(t => t.status === 'done').length,
-    overdue:     TICKETS.filter(isOverdue).length,
-  }), [])
+  // Загрузка сторов + автосид реестра из штата ТЗ
+  useEffect(() => { ticketsStore.loadFromDB() }, [])                      // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    staffStore.loadFromDB().then(() => {
+      if (applied && staffingPlan.length > 0) staffStore.seedIfEmpty(staffingPlan)
+    })
+  }, [applied, staffingPlan])                                             // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => {
-    if (activeTab === 'all')     return TICKETS
-    if (activeTab === 'overdue') return TICKETS.filter(isOverdue)
-    if (activeTab === 'open')    return TICKETS.filter(t => t.status === 'open' && !isOverdue(t))
-    return TICKETS.filter(t => t.status === activeTab)
-  }, [activeTab])
+  const buildingSystems = useMemo(() =>
+    systemsData.find(s => s.buildingId === activeBuildingId)?.systems ?? [],
+    [systemsData, activeBuildingId])
 
-  const tabBtn = (isActive) => ({
-    display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:9, fontSize:12, fontWeight: isActive ? 600 : 400, cursor:'pointer', border:'none', fontFamily:'inherit',
-    background: isActive ? 'linear-gradient(135deg,#1D4ED8,#7C3AED)' : '#FFFFFF',
-    color: isActive ? '#FFFFFF' : '#6B7280',
-    boxShadow: isActive ? '0 2px 10px rgba(29,78,216,.3)' : '0 0 0 1px #E8ECF5',
-  })
+  const knownSystemIds = useMemo(() => new Set(buildingSystems.map(s => s.id)), [buildingSystems])
+
+  const staffList = useMemo(() =>
+    staffStore.staff.filter(p => p.buildingId === activeBuildingId),
+    [staffStore.staff, activeBuildingId])
+
+  const dayTickets = useMemo(() =>
+    ticketsStore.tickets.filter(t => t.date === dateISO && t.buildingId === activeBuildingId),
+    [ticketsStore.tickets, dateISO, activeBuildingId])
+
+  const filtered = useMemo(() => dayTickets.filter(t =>
+    (typeFilter === 'all' || t.type === typeFilter) &&
+    (statusFilter === 'all' || t.status === statusFilter) &&
+    (sysFilter === 'all' || t.systemId === sysFilter)
+  ), [dayTickets, typeFilter, statusFilter, sysFilter])
+
+  // Группировка по исполнителям в порядке order
+  const groups = useMemo(() => {
+    const byPerson = new Map()
+    const unassigned = []
+    for (const t of filtered) {
+      if (!t.assigneeId) { unassigned.push(t); continue }
+      if (!byPerson.has(t.assigneeId)) byPerson.set(t.assigneeId, [])
+      byPerson.get(t.assigneeId).push(t)
+    }
+    for (const list of byPerson.values()) list.sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+    return { byPerson, unassigned }
+  }, [filtered])
+
+  if (!applied) return <NotAppliedStub />
+
+  async function handleGenerate() {
+    if (genRunning) return
+    setGenRunning(true)
+    try {
+      const [y, m, d] = dateISO.split('-').map(Number)
+      await ticketsStore.generateForDate(systemsData, useStaffStore.getState().staff, new Date(y, m - 1, d))
+    } finally {
+      setGenRunning(false)
+    }
+  }
+
+  const personName = id => staffStore.staff.find(p => p.id === id)?.name ?? 'Удалённый сотрудник'
+  const personRole = id => staffStore.staff.find(p => p.id === id)?.role ?? ''
+
+  const selStyle = { fontSize: 12, padding: '7px 10px', borderRadius: 8, border: '1px solid #E2E8F0', background: '#FFF', fontFamily: 'inherit', color: '#374151' }
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%', padding:24, gap:18, overflow:'hidden', background:'#F3F5FA' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 24, gap: 16, overflow: 'hidden', background: '#F3F5FA' }}>
 
       {/* Header */}
-      <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', flexShrink:0 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexShrink: 0, gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Тикеты</h1>
-          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>Заявки на обслуживание, ремонт и устранение замечаний</p>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Тикеты — наряд на день</h1>
+          <p style={{ margin: '6px 0 0', fontSize: 13, color: '#6B7280' }}>
+            Плановые работы из графиков ЭК/ТО + аварийные заявки · раскладка по исполнителям
+          </p>
         </div>
-        <button style={{ display:'flex', alignItems:'center', gap:7, padding:'11px 18px', borderRadius:10, fontSize:13, fontWeight:600, color:'#FFFFFF', border:'none', cursor:'pointer', fontFamily:'inherit', background:'linear-gradient(135deg,#1D4ED8,#7C3AED)', boxShadow:'0 4px 16px rgba(29,78,216,0.35)' }}>
-          <PlusIcon/>Новый тикет
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="date" value={dateISO} onChange={e => setDateISO(e.target.value)} style={selStyle} />
+          <button onClick={handleGenerate} disabled={genRunning}
+            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+              color: '#FFFFFF', border: 'none', cursor: genRunning ? 'wait' : 'pointer', fontFamily: 'inherit',
+              background: 'linear-gradient(135deg,#1D4ED8,#7C3AED)', opacity: genRunning ? .7 : 1 }}>
+            {genRunning ? 'Генерация…' : 'Сформировать наряд'}
+          </button>
+          <button onClick={() => setShowEmergency(true)}
+            style={{ padding: '10px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600, color: '#DC2626',
+              background: '#FEF2F2', border: '1px solid #FECACA', cursor: 'pointer', fontFamily: 'inherit' }}>
+            + Аварийная заявка
+          </button>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display:'flex', gap:8, flexShrink:0, flexWrap:'wrap' }}>
-        {TAB_FILTERS.map(tab => {
-          const isActive = activeTab === tab.key
-          const count    = counts[tab.key]
-          return (
-            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={tabBtn(isActive)}>
-              {tab.label}
-              <span style={{ padding:'1px 7px', borderRadius:8, fontSize:10, fontWeight:700, background: isActive ? 'rgba(255,255,255,.25)' : '#EEF0F8', color: isActive ? '#FFFFFF' : '#9CA3AF' }}>{count}</span>
-            </button>
-          )
-        })}
+      {/* Emergency form */}
+      {showEmergency && (
+        <EmergencyForm
+          systems={buildingSystems}
+          onClose={() => setShowEmergency(false)}
+          onCreate={payload => ticketsStore.createEmergency({ buildingId: activeBuildingId, ...payload }, slaData)}
+        />
+      )}
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={typeFilter} onChange={e => setType(e.target.value)} style={selStyle}>
+          <option value="all">Тип: все</option>
+          <option value="EK">ЭК</option>
+          <option value="TO">ТО</option>
+          <option value="emergency">Аварийные</option>
+        </select>
+        <select value={statusFilter} onChange={e => setStatus(e.target.value)} style={selStyle}>
+          <option value="all">Статус: все</option>
+          <option value="open">Открыт</option>
+          <option value="in_progress">В работе</option>
+          <option value="done">Закрыт</option>
+        </select>
+        <select value={sysFilter} onChange={e => setSys(e.target.value)} style={selStyle}>
+          <option value="all">Система: все</option>
+          {buildingSystems.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: '#9CA3AF', marginLeft: 'auto' }}>
+          {dayTickets.length} тикетов · {dayTickets.filter(t => t.status === 'done').length} закрыто
+        </span>
       </div>
 
-      {/* List */}
-      <div style={{ flex:1, overflow:'auto', display:'flex', flexDirection:'column', gap:8, paddingBottom:8 }}>
-        {filtered.length === 0 ? (
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:120, fontSize:13, color:'#9CA3AF' }}>
-            Нет тикетов по выбранным фильтрам
+      {/* Groups by assignee */}
+      <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 8 }}>
+        {dayTickets.length === 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 160, fontSize: 13, color: '#9CA3AF' }}>
+            Наряд на {dateISO} не сформирован — нажмите «Сформировать наряд»
           </div>
-        ) : (
-          filtered.map((t) => <TicketCard key={t.id} ticket={t} idx={TICKETS.indexOf(t)} />)
+        )}
+
+        {[...groups.byPerson.entries()].map(([personId, list]) => (
+          <div key={personId} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1117' }}>{personName(personId)}</span>
+              <span style={{ fontSize: 11, color: '#9CA3AF' }}>{personRole(personId)}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', background: '#EEF0F8', padding: '1px 8px', borderRadius: 8 }}>
+                {list.length}
+              </span>
+            </div>
+            {list.map(t => (
+              <TicketCard key={t.id} ticket={t} staffList={staffList}
+                staleSystem={t.systemId != null && !knownSystemIds.has(t.systemId)}
+                onStatus={ticketsStore.setStatus} onReassign={ticketsStore.reassign} />
+            ))}
+          </div>
+        ))}
+
+        {groups.unassigned.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#B91C1C' }}>
+              Нераспределённые ({groups.unassigned.length}) — нет подходящего исполнителя в реестре
+            </div>
+            {groups.unassigned.map(t => (
+              <TicketCard key={t.id} ticket={t} staffList={staffList}
+                staleSystem={t.systemId != null && !knownSystemIds.has(t.systemId)}
+                onStatus={ticketsStore.setStatus} onReassign={ticketsStore.reassign} />
+            ))}
+          </div>
         )}
       </div>
     </div>
