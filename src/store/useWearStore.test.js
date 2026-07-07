@@ -94,9 +94,14 @@ describe('generateInitialInspections', () => {
     const engineer = STAFF.find(p => p.kind === 'engineer')
     expect(t.assigneeId).toBe(engineer.id)
     const [y, m, d] = t.date.split('-').map(Number)
-    const wd = new Date(y, m - 1, d).getDay()
-    expect(wd).not.toBe(0)
-    expect(wd).not.toBe(6)
+    const date = new Date(y, m - 1, d)
+    expect(date.getDay()).not.toBe(0)
+    expect(date.getDay()).not.toBe(6)
+    // Компактная размазка: в пределах ближайших 5 рабочих дней (≤ 10 календарных)
+    const diffDays = (date - new Date(2026, 6, 7)) / 86_400_000
+    expect(diffDays).toBeGreaterThanOrEqual(1)
+    expect(diffDays).toBeLessThanOrEqual(10)
+    expect(res.dates).toContain(t.date)
   })
 
   it('повторный запуск не дублирует (skip по id)', async () => {

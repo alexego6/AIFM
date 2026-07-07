@@ -224,8 +224,9 @@ export default function WearPrediction() {
 
   async function handleInitialInspection() {
     const res = await ticketsStore.generateInitialInspections(systemsData, useStaffStore.getState().staff)
+    const fmtDates = (res.dates ?? []).map(d => new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })).join(', ')
     setInspectMsg(res.created > 0
-      ? `Создано ${res.created} тикетов первичной фиксации — назначены гл. инженеру, см. раздел Тикеты`
+      ? `Создано ${res.created} тикетов первичной фиксации — назначены гл. инженеру на даты: ${fmtDates} (раздел Тикеты, выберите дату)`
       : 'Тикеты первичной фиксации уже существуют — дубли не созданы')
   }
 
@@ -264,6 +265,20 @@ export default function WearPrediction() {
             {inspectMsg}
           </div>
         )}
+
+        {/* Открытые тикеты первичной фиксации этого объекта — где их искать */}
+        {(() => {
+          const openInspections = ticketsStore.tickets
+            .filter(t => t.type === 'inspection' && t.buildingId === activeBuildingId && t.status !== 'done')
+            .sort((a, b) => a.date.localeCompare(b.date))
+          if (openInspections.length === 0) return null
+          return (
+            <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 10, padding: '10px 14px', fontSize: 12, color: '#5B21B6' }}>
+              Открытых тикетов первичной фиксации: <strong>{openInspections.length}</strong> —{' '}
+              {openInspections.map(t => `${t.systemName} (${new Date(t.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })})`).join(' · ')}
+            </div>
+          )
+        })()}
 
         {/* Рекомендации закупки — замыкание на ЗИП */}
         {recommendations.length > 0 && (

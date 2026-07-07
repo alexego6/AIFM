@@ -4,7 +4,7 @@
 
 import { create } from 'zustand'
 import { makeIdb } from '../services/idbStore'
-import { generateDayTickets, contentHash, toISODate, hashInt } from '../services/dayScheduler'
+import { generateDayTickets, contentHash, toISODate } from '../services/dayScheduler'
 import { planDay, reassignAfterRemoval } from '../services/ticketPlanner'
 import { deriveNodes } from '../services/wearForecast'
 import { canChangeTicket, canReassign } from '../config/roleAccess'
@@ -173,21 +173,26 @@ export const useTicketsStore = create((set, get) => ({
       systemsWithNodes.get(key).count++
     }
 
-    // Ближайшие рабочие дни (до 3 недель вперёд)
+    // Ближайшие 5 рабочих дней — компактная размазка, тикеты легко найти
     const upcoming = []
-    for (let i = 1; i <= 21 && upcoming.length < 15; i++) {
+    for (let i = 1; i <= 10 && upcoming.length < 5; i++) {
       const d = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i)
       const wd = d.getDay()
       if (wd !== 0 && wd !== 6) upcoming.push(d)
     }
 
     const existingIds = new Set(get().tickets.map(t => t.id))
+    // Детерминированный порядок: сортировка по id → последовательная раздача дней
+    const pending = [...systemsWithNodes.values()]
+      .map(sys => ({ sys, id: contentHash(`inspection|${sys.buildingId}|${sys.systemId}`) }))
+      .sort((a, b) => a.id.localeCompare(b.id))
+
     const created = []
-    for (const sys of systemsWithNodes.values()) {
-      const id = contentHash(`inspection|${sys.buildingId}|${sys.systemId}`)
+    let dayIdx = 0
+    for (const { sys, id } of pending) {
       if (existingIds.has(id)) continue
       const engineer = staffAll.find(p => p.buildingId === sys.buildingId && p.kind === 'engineer')
-      const day = upcoming[hashInt(id) % upcoming.length] ?? upcoming[0] ?? from
+      const day = upcoming[dayIdx++ % upcoming.length] ?? from
       created.push({
         id,
         buildingId:  sys.buildingId,
@@ -216,7 +221,11 @@ export const useTicketsStore = create((set, get) => ({
       set({ tickets: next })
       await persist(next)
     }
-    return { created: created.length, skipped: systemsWithNodes.size - created.length }
+    return {
+      created: created.length,
+      skipped: systemsWithNodes.size - created.length,
+      dates: [...new Set(created.map(t => t.date))].sort(),
+    }
   },
 
   ticketsForDate: (iso, buildingId) =>
