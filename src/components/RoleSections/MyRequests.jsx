@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { usePlatformStore } from '../../store/usePlatformStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import { useTicketsStore } from '../../store/useTicketsStore'
+import { useStaffStore } from '../../store/useStaffStore'
 
 const STATUS_CFG = {
   open:        { label: 'Принята',    color: '#D97706', bg: '#FFFBEB' },
@@ -27,24 +28,27 @@ export default function MyRequests() {
     [systemsData, activeBuildingId])
   const [systemId, setSystemId] = useState('')
 
-  // Только заявки, созданные из ЭТОЙ сессии
+  // Только заявки, созданные из ЭТОЙ сессии В РОЛИ заказчика
+  // (тег clientId:role — chief из того же браузера сюда не попадает)
+  const myTag = `${clientId}:customer`
   const mine = useMemo(() =>
     ticketsStore.tickets
-      .filter(t => t.type === 'emergency' && t.createdBy === clientId)
+      .filter(t => t.type === 'emergency' && t.createdBy === myTag)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-    [ticketsStore.tickets, clientId])
+    [ticketsStore.tickets, myTag])
 
   async function submit() {
     if (!title.trim() || !applied) return
     const sys = systems.find(s => s.id === systemId)
+    await useStaffStore.getState().loadFromDB()
     await ticketsStore.createEmergency({
       buildingId: activeBuildingId,
       title,
       systemId: sys?.id ?? null,
       systemName: sys?.name ?? null,
       category: sys?.category ?? 'other',
-      createdBy: clientId,
-    }, slaData)
+      createdBy: myTag,
+    }, slaData, useStaffStore.getState().staff)
     setTitle(''); setSystemId(''); setSent(true)
     setTimeout(() => setSent(false), 4000)
   }

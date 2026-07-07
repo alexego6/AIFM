@@ -238,6 +238,9 @@ function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, applie
       {/* Row 4: реестр исполнителей (только chief/director) */}
       {canManageStaff && <StaffPanel buildingId={buildingId} />}
 
+      {/* Руководитель УК: сводный режим — портфель всех объектов */}
+      {isDirector && <PortfolioSummary />}
+
       {/* Руководитель УК: загрузка контракта — заглушка (в разработке) */}
       {isDirector && (
         <div style={{ background:'#FFFFFF', border:'1px dashed #C7D2FE', borderRadius:14, padding:'16px 20px',
@@ -255,6 +258,49 @@ function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, applie
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Сводный режим директора: портфель всех объектов ─────────────────────────
+function PortfolioSummary() {
+  const { buildings, systemsData, staffingPlan } = usePlatformStore()
+  const rows = useMemo(() => buildings.map(b => {
+    const sd = systemsData.find(s => s.buildingId === b.id)
+    const plan = staffingPlan.find(p => p.buildingId === b.id)
+    const sysCount = sd?.systems?.length ?? 0
+    const monthTasks = sd ? tasksThisMonth(sd, new Date().getMonth()) : 0
+    const fot = plan
+      ? Math.round(((plan.numEngineers ?? 0) * 120_000 + (plan.numTechnicians ?? 0) * 75_000 + (plan.watchStavki ?? 0) * 65_000) * 1.3)
+      : null
+    return { id: b.id, name: b.name, areaSqm: b.areaSqm, sysCount, monthTasks, fot }
+  }), [buildings, systemsData, staffingPlan])
+
+  const totalFot = rows.reduce((s, r) => s + (r.fot ?? 0), 0)
+  const fmtR = n => n >= 1_000_000 ? (n / 1_000_000).toFixed(2) + ' М₽' : Math.round(n / 1000) + ' тыс. ₽'
+
+  return (
+    <div style={{ background:'#FFFFFF', border:'1px solid #E8ECF5', borderRadius:14, padding:20 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+        <h3 style={{ margin:0, fontSize:14, fontWeight:600, color:'#0D1117' }}>Портфель объектов (сводно)</h3>
+        <span style={{ fontSize:13, fontWeight:700, color:'#7C3AED' }}>ФОТ портфеля: {fmtR(totalFot)}/мес</span>
+      </div>
+      <div style={{ display:'flex', padding:'6px 0', borderBottom:'1px solid #E8ECF5', fontSize:11, fontWeight:600, color:'#6B7280' }}>
+        <div style={{ flex:2 }}>Объект</div>
+        <div style={{ flex:1, textAlign:'right' }}>Площадь, м²</div>
+        <div style={{ flex:1, textAlign:'right' }}>Систем</div>
+        <div style={{ flex:1, textAlign:'right' }}>Операций/мес</div>
+        <div style={{ flex:1, textAlign:'right' }}>ФОТ/мес</div>
+      </div>
+      {rows.map(r => (
+        <div key={r.id} style={{ display:'flex', padding:'8px 0', borderBottom:'1px solid #F3F4F6', fontSize:12, color:'#374151' }}>
+          <div style={{ flex:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', paddingRight:8 }}>{r.name}</div>
+          <div style={{ flex:1, textAlign:'right' }}>{r.areaSqm ? r.areaSqm.toLocaleString('ru-RU') : '—'}</div>
+          <div style={{ flex:1, textAlign:'right' }}>{r.sysCount}</div>
+          <div style={{ flex:1, textAlign:'right' }}>{r.monthTasks}</div>
+          <div style={{ flex:1, textAlign:'right', fontWeight:600 }}>{r.fot != null ? fmtR(r.fot) : '—'}</div>
+        </div>
+      ))}
     </div>
   )
 }

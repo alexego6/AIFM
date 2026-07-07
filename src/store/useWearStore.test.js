@@ -158,3 +158,21 @@ describe('createdBy на аварийках', () => {
     expect(mine[0].title).toBe('Потоп')
   })
 })
+
+describe('createEmergency — авто-назначение суточнику смены', () => {
+  it('назначается суточнику текущей смены при наличии реестра', async () => {
+    useTicketsStore.setState({ tickets: [], loaded: true })
+    const t = await useTicketsStore.getState().createEmergency(
+      { buildingId: 'b1', title: 'Авария лифта', createdBy: 'c1:customer' }, null, STAFF)
+    expect(t.assigneeId).not.toBeNull()
+    const person = STAFF.find(p => p.id === t.assigneeId)
+    expect(person.kind).toBe('watchman')
+  })
+
+  it('без реестра — нераспределённая (null)', async () => {
+    useTicketsStore.setState({ tickets: [], loaded: true })
+    const t = await useTicketsStore.getState().createEmergency(
+      { buildingId: 'b1', title: 'Авария', createdBy: 'c1:customer' }, null, [])
+    expect(t.assigneeId).toBeNull()
+  })
+})

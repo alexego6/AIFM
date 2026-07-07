@@ -7,6 +7,7 @@ import { makeIdb } from '../services/idbStore'
 import { generateDayTickets, contentHash, toISODate } from '../services/dayScheduler'
 import { planDay, reassignAfterRemoval } from '../services/ticketPlanner'
 import { deriveNodes } from '../services/wearForecast'
+import { shiftForDate } from './useStaffStore'
 import { canChangeTicket, canReassign } from '../config/roleAccess'
 
 const idb = makeIdb('aifm_tickets')
@@ -97,10 +98,16 @@ export const useTicketsStore = create((set, get) => ({
   },
 
   // Аварийная заявка: ручное создание, SLA-дедлайн автоматически.
-  // createdBy — идентификатор сессии-автора: заказчик трекает только свои заявки.
-  createEmergency: async ({ buildingId, title, systemId = null, systemName = null, category = 'other', createdBy = null }, slaData) => {
+  // createdBy — тег сессии-автора (clientId:role): заказчик трекает только свои.
+  // staffAll — реестр: аварийка сразу назначается суточнику текущей смены
+  // (он на объекте 24 ч); нет суточника → нераспределённая, chief переназначит.
+  createEmergency: async ({ buildingId, title, systemId = null, systemName = null, category = 'other', createdBy = null }, slaData, staffAll = []) => {
     const createdAt = new Date()
     const { notifyDeadline, slaDeadline, notifMin, arriveMin } = emergencySla(slaData, createdAt)
+    const shift = shiftForDate(createdAt)
+    const watchman = staffAll.find(p => p.buildingId === buildingId && p.kind === 'watchman' && p.shift === shift)
+      ?? staffAll.find(p => p.buildingId === buildingId && p.kind === 'watchman' && !p.shift)
+      ?? null
     const ticket = {
       id: contentHash(`emergency|${buildingId}|${title}|${createdAt.toISOString()}`),
       createdBy,
@@ -114,7 +121,7 @@ export const useTicketsStore = create((set, get) => ({
       periodicity: null,
       date: toISODate(createdAt),
       status: 'open',
-      assigneeId: null,
+      assigneeId: watchman?.id ?? null,
       manuallyAssigned: false,
       order: null,
       source: 'user',

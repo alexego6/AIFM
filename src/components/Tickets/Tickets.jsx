@@ -402,7 +402,9 @@ export default function Tickets() {
         <EmergencyForm
           systems={buildingSystems}
           onClose={() => setShowEmergency(false)}
-          onCreate={payload => ticketsStore.createEmergency({ buildingId: activeBuildingId, createdBy: session.clientId, ...payload }, slaData)}
+          onCreate={payload => ticketsStore.createEmergency(
+            { buildingId: activeBuildingId, createdBy: `${session.clientId}:${session.role}`, ...payload },
+            slaData, useStaffStore.getState().staff)}
         />
       )}
 
