@@ -2,7 +2,7 @@
 // Phase 2 TODO: annualQty ← tickets + fact consumption после 12 мес → qtyStatus:'from_fact'
 
 // ── Нормализация классов оборудования → ресурсный ключ ───────────────────────
-const CLASS_ALIASES = {
+export const CLASS_ALIASES = {
   'ahu': 'ahu', 'ahu_supply': 'ahu', 'ahu_exhaust': 'ahu', 'air_handling_unit': 'ahu',
   'fan_coil': 'fancoil', 'fan_coil_unit': 'fancoil', 'fancoil': 'fancoil',
   'cooling_beam': 'cooling_beam',
@@ -29,7 +29,7 @@ const CLASS_ALIASES = {
 
 // ── Ресурсные наборы по ключу ─────────────────────────────────────────────────
 // spareParts/consumables: annualQty всегда null (Phase 1), qtyStatus:'pending_fact'
-const RESOURCE_SETS = {
+export const RESOURCE_SETS = {
   ahu: {
     spareParts: [
       { name: 'Воздушный фильтр секционный G4/F7 (под марку установки)' },

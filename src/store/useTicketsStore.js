@@ -4,8 +4,10 @@
 
 import { create } from 'zustand'
 import { makeIdb } from '../services/idbStore'
-import { generateDayTickets, contentHash, toISODate } from '../services/dayScheduler'
+import { generateDayTickets, contentHash, toISODate, hashInt } from '../services/dayScheduler'
 import { planDay, reassignAfterRemoval } from '../services/ticketPlanner'
+import { deriveNodes } from '../services/wearForecast'
+import { canChangeTicket, canReassign } from '../config/roleAccess'
 
 const idb = makeIdb('aifm_tickets')
 
@@ -69,29 +71,39 @@ export const useTicketsStore = create((set, get) => ({
     return { created: fresh.length, skipped: dayAll.length - fresh.length, unassigned: unassignedTotal }
   },
 
-  setStatus: async (ticketId, status) => {
+  // Guard в сторе, не только в UI: actor {role, personId} — техник меняет
+  // статус ТОЛЬКО своих тикетов. Без actor (внутренние вызовы) — полный доступ.
+  setStatus: async (ticketId, status, actor = null) => {
+    const ticket = get().tickets.find(t => t.id === ticketId)
+    if (!ticket) return false
+    if (actor && !canChangeTicket(actor, ticket)) return false
     const next = get().tickets.map(t => t.id === ticketId
       ? { ...t, status, closedAt: status === 'done' ? new Date().toISOString() : null }
       : t)
     set({ tickets: next })
     await persist(next)
+    return true
   },
 
   // Ручное переназначение — фиксируется флагом, регенерация его не тронет
-  reassign: async (ticketId, personId) => {
+  reassign: async (ticketId, personId, actor = null) => {
+    if (actor && !canReassign(actor)) return false
     const next = get().tickets.map(t => t.id === ticketId
       ? { ...t, assigneeId: personId, manuallyAssigned: true }
       : t)
     set({ tickets: next })
     await persist(next)
+    return true
   },
 
-  // Аварийная заявка: ручное создание, SLA-дедлайн автоматически
-  createEmergency: async ({ buildingId, title, systemId = null, systemName = null, category = 'other' }, slaData) => {
+  // Аварийная заявка: ручное создание, SLA-дедлайн автоматически.
+  // createdBy — идентификатор сессии-автора: заказчик трекает только свои заявки.
+  createEmergency: async ({ buildingId, title, systemId = null, systemName = null, category = 'other', createdBy = null }, slaData) => {
     const createdAt = new Date()
     const { notifyDeadline, slaDeadline, notifMin, arriveMin } = emergencySla(slaData, createdAt)
     const ticket = {
       id: contentHash(`emergency|${buildingId}|${title}|${createdAt.toISOString()}`),
+      createdBy,
       buildingId,
       systemId,
       systemName: systemName ?? '—',
@@ -141,6 +153,70 @@ export const useTicketsStore = create((set, get) => ({
     }
     set({ tickets: cur })
     await persist(cur)
+  },
+
+  /**
+   * Первичная фиксация износа: по одному inspection-тикету на систему с
+   * трекаемыми узлами, назначение — инженеру объекта (гл. инженер), размазка
+   * по ближайшим рабочим дням детерминированно (хэш системы → день).
+   * id = hash(inspection|building|system) — повторный запуск не дублирует.
+   */
+  generateInitialInspections: async (systemsData, staffAll, from = new Date()) => {
+    const nodes = deriveNodes(systemsData)
+    const systemsWithNodes = new Map() // `${buildingId}|${systemId}` → {buildingId, systemId, systemName, category, count}
+    for (const n of nodes) {
+      const key = `${n.buildingId}|${n.systemId}`
+      if (!systemsWithNodes.has(key)) {
+        systemsWithNodes.set(key, { buildingId: n.buildingId, systemId: n.systemId,
+          systemName: n.systemName, category: n.category, count: 0 })
+      }
+      systemsWithNodes.get(key).count++
+    }
+
+    // Ближайшие рабочие дни (до 3 недель вперёд)
+    const upcoming = []
+    for (let i = 1; i <= 21 && upcoming.length < 15; i++) {
+      const d = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i)
+      const wd = d.getDay()
+      if (wd !== 0 && wd !== 6) upcoming.push(d)
+    }
+
+    const existingIds = new Set(get().tickets.map(t => t.id))
+    const created = []
+    for (const sys of systemsWithNodes.values()) {
+      const id = contentHash(`inspection|${sys.buildingId}|${sys.systemId}`)
+      if (existingIds.has(id)) continue
+      const engineer = staffAll.find(p => p.buildingId === sys.buildingId && p.kind === 'engineer')
+      const day = upcoming[hashInt(id) % upcoming.length] ?? upcoming[0] ?? from
+      created.push({
+        id,
+        buildingId:  sys.buildingId,
+        systemId:    sys.systemId,
+        systemName:  sys.systemName,
+        category:    sys.category,
+        taskId:      null,
+        type:        'inspection',
+        title:       `Первичная фиксация износа — ${sys.systemName} (${sys.count} узл.)`,
+        periodicity: null,
+        date:        toISODate(day),
+        status:      'open',
+        assigneeId:  engineer?.id ?? null,
+        manuallyAssigned: true,   // раскладка дня не перекидывает inspection
+        order:       null,
+        source:      'schedule',
+        needsReview: false,
+        slaDeadline: null,
+        slaBasis:    null,
+        createdAt:   new Date().toISOString(),
+        closedAt:    null,
+      })
+    }
+    if (created.length > 0) {
+      const next = [...get().tickets, ...created]
+      set({ tickets: next })
+      await persist(next)
+    }
+    return { created: created.length, skipped: systemsWithNodes.size - created.length }
   },
 
   ticketsForDate: (iso, buildingId) =>
