@@ -654,25 +654,15 @@ export default function TZAnalyzer() {
                 }
               }
 
-              if (platformApplied && appliedAt) {
-                return (
-                  <div style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.2"><polyline points="20 6 9 17 4 12"/></svg>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#059669' }}>Применено в платформу</div>
-                      <div style={{ fontSize: 11, color: '#6EE7B7', marginTop: 2 }}>{new Date(appliedAt).toLocaleString('ru-RU')}</div>
-                    </div>
-                    <button
-                      onClick={() => setActiveSection('dashboard')}
-                      style={{ fontSize: 13, fontWeight: 600, color: '#059669', background: 'none', border: '1px solid #A7F3D0', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontFamily: "'Golos Text',system-ui,sans-serif" }}
-                    >Дашборд →</button>
-                  </div>
-                )
-              }
-
               return (
                 <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#0369A1' }}>Этап 6 — Интеграция в платформу</div>
+
+                  {platformApplied && appliedAt && (
+                    <div style={{ fontSize: 12, color: '#64748B' }}>
+                      Ранее применено: {new Date(appliedAt).toLocaleString('ru-RU')} — повторное применение перезапишет данные платформы
+                    </div>
+                  )}
 
                   {/* Validation */}
                   {(validation.errors.length > 0 || validation.warnings.length > 0) && (
