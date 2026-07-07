@@ -9,21 +9,31 @@ import SLA from './components/SLA/SLA'
 import Tickets from './components/Tickets/Tickets'
 import Dashboard from './components/Dashboard/Dashboard'
 import TZAnalyzer from './components/TZAnalyzer/TZAnalyzer'
+import RoleSwitcher from './components/RoleSwitcher'
+import MyDay from './components/RoleSections/MyDay'
+import CustomerSchedule from './components/RoleSections/CustomerSchedule'
+import MyRequests from './components/RoleSections/MyRequests'
 import { useAppStore } from './store/useAppStore'
 import { useTZStore } from './store/useTZStore'
 import { usePlatformStore } from './store/usePlatformStore'
+import { useSessionStore } from './store/useSessionStore'
+import { useStaffStore } from './store/useStaffStore'
+import { accessFor } from './config/roleAccess'
 import './index.css'
 
 const SECTION_LABELS = {
-  'building':     'План здания',
-  'bim':          'BIM-просмотр',
-  'schedule-ek':  'График ЭК',
-  'schedule-to':  'График ТО',
-  'sla':          'SLA',
-  'wear':         'Прогноз износа',
-  'tickets':      'Тикеты',
-  'dashboard':    'Дашборд',
-  'tz-analysis':  'Анализ ТЗ',
+  'building':      'План здания',
+  'bim':           'BIM-просмотр',
+  'schedule-ek':   'График ЭК',
+  'schedule-to':   'График ТО',
+  'sla':           'SLA',
+  'wear':          'Прогноз износа',
+  'tickets':       'Тикеты',
+  'dashboard':     'Дашборд',
+  'tz-analysis':   'Анализ ТЗ',
+  'my-day':        'Мой день',
+  'schedule-view': 'График работ',
+  'my-requests':   'Мои заявки',
 }
 
 const TZ_MIME = /^(application\/vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|spreadsheetml\.sheet)|application\/(pdf|vnd\.ms-excel)|text\/plain)/
@@ -34,9 +44,30 @@ export default function App() {
   const { activeSection, setActiveSection, setBimPendingFile, setBtiPendingFile } = useAppStore()
   const { setTzPendingFile } = useTZStore()
   const { applied, buildings: pBuildings, activeBuildingId, setActiveBuildingId, loadFromDB: loadPlatform } = usePlatformStore()
+  const { role, personId } = useSessionStore()
+  const { staff } = useStaffStore()
 
   // Load platform store from IDB on mount
   useEffect(() => { loadPlatform() }, [loadPlatform])
+
+  const access = accessFor(role)
+
+  // Guard разделов: недоступный роли раздел → дефолтный раздел роли
+  useEffect(() => {
+    if (!access.sections.includes(activeSection)) {
+      setActiveSection(access.defaultSection)
+    }
+  }, [role, activeSection, access, setActiveSection])
+
+  // Техник привязан к объекту своей персоны — ObjectSwitcher зафиксирован
+  const executorPerson = role === 'executor' ? staff.find(p => p.id === personId) : null
+  useEffect(() => {
+    if (executorPerson && executorPerson.buildingId !== activeBuildingId) {
+      setActiveBuildingId(executorPerson.buildingId)
+    }
+  }, [executorPerson, activeBuildingId, setActiveBuildingId])
+
+  const canSwitchObjects = access.actions.switchObjects
   const [globalDrag, setGlobalDrag] = useState(false)
 
   const onGlobalDragOver = useCallback((e) => {
@@ -76,6 +107,9 @@ export default function App() {
       case 'tickets':      return <Tickets />
       case 'dashboard':    return <Dashboard />
       case 'tz-analysis':  return <TZAnalyzer />
+      case 'my-day':        return <MyDay />
+      case 'schedule-view': return <CustomerSchedule />
+      case 'my-requests':   return <MyRequests />
       default:             return null
     }
   }
@@ -141,20 +175,27 @@ export default function App() {
         <header style={{ height:60, flex:'none', background:'#FFFFFF', borderBottom:'1px solid #E8ECF5', display:'flex', alignItems:'center', padding:'0 22px', gap:18, boxShadow:'0 1px 4px rgba(29,78,216,0.05)' }}>
           <div style={{ display:'flex', flexDirection:'column', lineHeight:1.15, minWidth:0 }}>
             {applied && pBuildings.length > 0 ? (
-              <select
-                value={activeBuildingId ?? pBuildings[0]?.id ?? ''}
-                onChange={e => setActiveBuildingId(e.target.value)}
-                style={{
-                  fontSize:11, color:'#1D4ED8', letterSpacing:'.3px', fontWeight:600,
-                  background:'none', border:'none', cursor:'pointer', padding:0,
-                  fontFamily:"'Golos Text',system-ui,sans-serif", appearance:'none',
-                  WebkitAppearance:'none', outline:'none', maxWidth:260,
-                }}
-              >
-                {pBuildings.map(b => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
+              canSwitchObjects ? (
+                <select
+                  value={activeBuildingId ?? pBuildings[0]?.id ?? ''}
+                  onChange={e => setActiveBuildingId(e.target.value)}
+                  style={{
+                    fontSize:11, color:'#1D4ED8', letterSpacing:'.3px', fontWeight:600,
+                    background:'none', border:'none', cursor:'pointer', padding:0,
+                    fontFamily:"'Golos Text',system-ui,sans-serif", appearance:'none',
+                    WebkitAppearance:'none', outline:'none', maxWidth:260,
+                  }}
+                >
+                  {pBuildings.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{ fontSize:11, color:'#6B7280', letterSpacing:'.3px', fontWeight:600, maxWidth:260,
+                  overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {pBuildings.find(b => b.id === activeBuildingId)?.name ?? pBuildings[0]?.name ?? ''}
+                </div>
+              )
             ) : (
               <div style={{ fontSize:11, color:'#9CA3AF', letterSpacing:'.4px' }}>БЦ «Меридиан» · Корпус B</div>
             )}
@@ -176,14 +217,8 @@ export default function App() {
               <span style={{ position:'absolute', top:7, right:8, width:7, height:7, borderRadius:'50%', background:'#DC2626', border:'1.5px solid #FFFFFF' }} />
             </button>
 
-            {/* User */}
-            <div style={{ display:'flex', alignItems:'center', gap:10, paddingLeft:4, borderLeft:'1px solid #E8ECF5', marginLeft:2 }}>
-              <div style={{ width:34, height:34, borderRadius:'50%', background:'linear-gradient(135deg,#7C3AED,#1D4ED8)', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:600, fontSize:13, color:'#FFFFFF' }}>ИП</div>
-              <div style={{ lineHeight:1.15 }}>
-                <div style={{ fontSize:13, fontWeight:600 }}>И. Петров</div>
-                <div style={{ fontSize:11, color:'#9CA3AF' }}>Гл. инженер</div>
-              </div>
-            </div>
+            {/* Роль / персона */}
+            <RoleSwitcher />
           </div>
         </header>
 

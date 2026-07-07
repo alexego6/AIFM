@@ -8,6 +8,8 @@ import {
   tasksPerMonth, tasksThisMonth, totalEquipmentUnits, systemsDistribution,
 } from '../../services/platformAdapter'
 import StaffPanel from './StaffPanel'
+import { useSessionStore } from '../../store/useSessionStore'
+import { can } from '../../config/roleAccess'
 
 const TODAY = new Date()
 const CURRENT_MONTH = TODAY.getMonth() // 0-based
@@ -59,7 +61,7 @@ const DASH_KPIS_ICONS = {
 }
 
 // ── Platform-data dashboard ──────────────────────────────────────────────────
-function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, appliedAt, buildingName, buildingId }) {
+function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, appliedAt, buildingName, buildingId, canManageStaff, isDirector }) {
   const sysDist = useMemo(() => systemsDistribution(buildingData), [buildingData])
   const monthCounts = useMemo(() => tasksPerMonth(buildingData), [buildingData])
   const eqTotal  = useMemo(() => totalEquipmentUnits(buildingData), [buildingData])
@@ -233,8 +235,26 @@ function PlatformDashboard({ buildingData, staffingEntry, resourcesEntry, applie
         </div>
       </div>
 
-      {/* Row 4: реестр исполнителей */}
-      <StaffPanel buildingId={buildingId} />
+      {/* Row 4: реестр исполнителей (только chief/director) */}
+      {canManageStaff && <StaffPanel buildingId={buildingId} />}
+
+      {/* Руководитель УК: загрузка контракта — заглушка (в разработке) */}
+      {isDirector && (
+        <div style={{ background:'#FFFFFF', border:'1px dashed #C7D2FE', borderRadius:14, padding:'16px 20px',
+          display:'flex', alignItems:'center', gap:12 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="1.6">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#4338CA' }}>Загрузить контракт на ТО</div>
+            <div style={{ fontSize:11, color:'#9CA3AF' }}>Сверка объёмов контракта с плановыми графиками — в разработке</div>
+          </div>
+          <button disabled style={{ fontSize:12, fontWeight:600, color:'#94A3B8', background:'#F1F5F9',
+            border:'none', borderRadius:8, padding:'8px 16px', cursor:'not-allowed', fontFamily:'inherit' }}>
+            В разработке
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -384,6 +404,7 @@ function MockDashboard() {
 // ── Root ─────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { applied, systemsData, buildings, activeBuildingId, staffingPlan, resourcesPlan, appliedAt } = usePlatformStore()
+  const { role } = useSessionStore()
 
   const buildingData  = useMemo(() =>
     systemsData.find(s => s.buildingId === activeBuildingId) ?? systemsData[0] ?? null,
@@ -412,6 +433,8 @@ export default function Dashboard() {
             appliedAt={appliedAt}
             buildingName={buildingName}
             buildingId={activeBuildingId ?? buildings[0]?.id ?? null}
+            canManageStaff={can({ role }, 'manageStaff')}
+            isDirector={role === 'director'}
           />
         : <MockDashboard />
       }

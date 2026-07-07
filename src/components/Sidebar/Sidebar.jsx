@@ -1,4 +1,6 @@
 import { useAppStore } from '../../store/useAppStore'
+import { useSessionStore } from '../../store/useSessionStore'
+import { accessFor } from '../../config/roleAccess'
 import { TICKETS } from '../../data/tickets'
 
 const TODAY = new Date()
@@ -85,8 +87,29 @@ const NAV_ITEMS = [
   )},
 ]
 
+// Разделы ролевых представлений (executor/customer) — добавляются к NAV динамически
+const ROLE_NAV_ITEMS = {
+  'my-day': { id:'my-day', label:'Мой день', icon:(
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+  )},
+  'schedule-view': { id:'schedule-view', label:'График работ', icon:(
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+  )},
+  'my-requests': { id:'my-requests', label:'Мои заявки', icon:(
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+  )},
+}
+
 export default function Sidebar() {
   const { activeSection, setActiveSection, bimLoaded } = useAppStore()
+  const { role } = useSessionStore()
+  const access = accessFor(role)
+
+  // Видимые разделы: пересечение NAV с картой роли, ролевые — из ROLE_NAV_ITEMS
+  const visibleItems = access.sections.map(id =>
+    NAV_ITEMS.find(n => n.id === id) ??
+    (ROLE_NAV_ITEMS[id] ? { ...ROLE_NAV_ITEMS[id], iconEl: ROLE_NAV_ITEMS[id].icon } : null)
+  ).filter(Boolean)
 
   return (
     <aside style={S.aside}>
@@ -101,7 +124,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav style={S.nav}>
-        {NAV_ITEMS.map(item => {
+        {visibleItems.map(item => {
           const isActive = activeSection === item.id
           const isFrozen = bimLoaded && BIM_FROZEN.has(item.id)
           return (

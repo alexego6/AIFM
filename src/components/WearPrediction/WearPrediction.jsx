@@ -1,243 +1,318 @@
-import { useState, useMemo } from 'react'
-import { EQUIPMENT, SYSTEMS } from '../../data/building'
-import { WEAR_DATA } from '../../data/wear'
-import { fetchWearPrediction } from '../../services/claudeApi'
+// Прогноз износа — рабочий раздел (замена demo-заглушки).
+// Узлы деривируются из платформы на лету, замеры — IDB aifm_wear,
+// тренд/ETA — wearForecast, дата следующего обхода — dayScheduler. 0 API.
+
+import { useEffect, useMemo, useState } from 'react'
 import { usePlatformStore } from '../../store/usePlatformStore'
+import { useWearStore } from '../../store/useWearStore'
+import { useStaffStore } from '../../store/useStaffStore'
+import { useSessionStore } from '../../store/useSessionStore'
+import { useTicketsStore } from '../../store/useTicketsStore'
+import { deriveNodes, linearTrend, nextRoundDate, purchaseRecommendations } from '../../services/wearForecast'
+import { MIN_MEASUREMENTS, WEAR_THRESHOLDS } from '../../services/wearConfig'
+import { can } from '../../config/roleAccess'
+import { toISODate } from '../../services/dayScheduler'
 
-const MERGED = EQUIPMENT.map(eq => {
-  const wd = WEAR_DATA.find(w => w.equipmentId === eq.id)
-  return { ...eq, wear: wd?.wear ?? 20, probability: wd?.probability ?? 1, consequence: wd?.consequence ?? 1 }
-})
-
-const wearColor = w => w >= 70 ? '#DC2626' : w >= 40 ? '#D97706' : '#059669'
-
-function riskLabel(p, c) {
-  const s = p * c
-  if (s >= 15) return { label:'Критический', color:'#DC2626', bg:'rgba(220,38,38,.1)' }
-  if (s >= 9)  return { label:'Высокий',     color:'#D97706', bg:'rgba(215,119,6,.1)' }
-  if (s >= 4)  return { label:'Средний',     color:'#D97706', bg:'rgba(215,119,6,.08)' }
-  return              { label:'Низкий',      color:'#059669', bg:'rgba(5,150,105,.1)' }
+const STATUS_CFG = {
+  accumulating: { label: 'Накопление данных', color: '#6B7280', bg: '#F3F4F6' },
+  stable:       { label: 'Стабилен',          color: '#0891B2', bg: '#ECFEFF' },
+  ok:           { label: 'Норма',             color: '#059669', bg: '#ECFDF5' },
+  watch:        { label: 'Наблюдение',        color: '#D97706', bg: '#FFFBEB' },
+  urgent:       { label: 'Замена скоро',      color: '#DC2626', bg: '#FEF2F2' },
 }
 
-function remainingResource(wear) {
-  const rem = 100 - wear
-  if (rem <= 5)  return '< 1 мес.'
-  if (rem <= 15) return `${Math.round(rem / 3)} мес.`
-  if (rem <= 40) return `${Math.round(rem / 5)} мес.`
-  return `${Math.round(rem / 8)} мес.`
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'
 }
 
-function CircularGauge({ value }) {
-  const r = 68, cx = 80, cy = 80
-  const circ = 2 * Math.PI * r
-  const offset = circ * (1 - value / 100)
-  const color = wearColor(value)
+function fmtMonths(m) {
+  if (m == null) return null
+  if (m < 1) return '< 1 мес'
+  return `≈ ${Math.round(m)} мес`
+}
+
+// Spark-line истории замеров — чистый SVG, без новых библиотек
+function SparkLine({ measurements, width = 140, height = 36 }) {
+  const pts = [...measurements].sort((a, b) => new Date(a.date) - new Date(b.date))
+  if (pts.length < 2) return null
+  const xs = pts.map(p => new Date(p.date).getTime())
+  const ys = pts.map(p => p.wearPct)
+  const x0 = Math.min(...xs), x1 = Math.max(...xs)
+  const pad = 3
+  const px = x => x1 === x0 ? width / 2 : pad + (x - x0) / (x1 - x0) * (width - 2 * pad)
+  const py = y => height - pad - (y / 100) * (height - 2 * pad)
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${px(xs[i]).toFixed(1)},${py(ys[i]).toFixed(1)}`).join(' ')
   return (
-    <svg width="160" height="160" viewBox="0 0 160 160">
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#E8ECF5" strokeWidth="10"/>
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth="10"
-        strokeDasharray={circ} strokeDashoffset={offset}
-        strokeLinecap="round" transform="rotate(-90 80 80)"/>
-      <text x={cx} y={cy + 6} textAnchor="middle" fontSize="28" fontWeight="700" fill={color} fontFamily="'Golos Text',system-ui">{value}%</text>
-      <text x={cx} y={cy + 22} textAnchor="middle" fontSize="11" fill="#9CA3AF" fontFamily="'Golos Text',system-ui">износ</text>
+    <svg width={width} height={height} style={{ display: 'block' }}>
+      <line x1="0" y1={py(WEAR_THRESHOLDS.critical)} x2={width} y2={py(WEAR_THRESHOLDS.critical)} stroke="#FCA5A5" strokeWidth="1" strokeDasharray="3 3" />
+      <line x1="0" y1={py(WEAR_THRESHOLDS.warning)} x2={width} y2={py(WEAR_THRESHOLDS.warning)} stroke="#FDE68A" strokeWidth="1" strokeDasharray="3 3" />
+      <path d={d} fill="none" stroke="#1D4ED8" strokeWidth="1.6" />
+      <circle cx={px(xs[xs.length - 1])} cy={py(ys[ys.length - 1])} r="2.5" fill="#1D4ED8" />
     </svg>
   )
 }
 
-function DetailPanel({ item, onClose, aiText, aiLoading }) {
-  const risk = riskLabel(item.probability, item.consequence)
-  const sys  = SYSTEMS[item.system]
-  const factors = [
-    item.wear >= 80 && { text: `Наработка превышает ресурс на ${item.wear - 70}%`, level:'crit' },
-    item.probability >= 4 && { text: '3 отказа за последние 6 мес.', level:'crit' },
-    item.consequence >= 4 && { text: 'Вибрация выше нормы', level:'warn' },
-    item.wear >= 50 && { text: 'Рекомендована внеплановая проверка', level:'warn' },
-  ].filter(Boolean).slice(0, 3)
+function AddMeasurementForm({ onSave, onClose }) {
+  const [date, setDate] = useState(() => toISODate(new Date()))
+  const [pct, setPct]   = useState('')
+  const [note, setNote] = useState('')
 
+  function submit() {
+    const v = parseFloat(pct)
+    if (isNaN(v)) return
+    onSave({ date, wearPct: v, note: note.trim() || null })
+    onClose()
+  }
+
+  const inp = { fontSize: 12, padding: '6px 9px', borderRadius: 7, border: '1px solid #E2E8F0', fontFamily: 'inherit', outline: 'none' }
   return (
-    <div style={{ width:280, flexShrink:0, background:'#FFFFFF', borderLeft:'1px solid #E8ECF5', display:'flex', flexDirection:'column', height:'100%', overflow:'auto' }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 18px', borderBottom:'1px solid #E8ECF5' }}>
-        <div style={{ fontSize:13, fontWeight:600, color:'#0D1117', lineHeight:1.3 }}>{item.name}</div>
-        <button onClick={onClose} style={{ color:'#9CA3AF', background:'none', border:'none', fontSize:20, cursor:'pointer', padding:0, lineHeight:1 }}>×</button>
-      </div>
-
-      <div style={{ display:'flex', justifyContent:'center', paddingTop:16, paddingBottom:8 }}>
-        <CircularGauge value={item.wear} />
-      </div>
-
-      <div style={{ padding:'0 18px 14px', textAlign:'center', fontSize:11, color:'#6B7280' }}>
-        Прогнозный износ · остаток ресурса {remainingResource(item.wear)}
-      </div>
-
-      <div style={{ padding:'12px 18px', borderTop:'1px solid #E8ECF5' }}>
-        <div style={{ fontSize:10, color:'#9CA3AF', textTransform:'uppercase', letterSpacing:'.5px', marginBottom:10, fontWeight:600 }}>Риск-факторы</div>
-        {factors.length === 0 ? (
-          <div style={{ fontSize:11, color:'#9CA3AF' }}>Факторы риска не выявлены</div>
-        ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:9 }}>
-            {factors.map((f, i) => (
-              <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                <span style={{ width:7, height:7, borderRadius:'50%', background: f.level==='crit'?'#DC2626':'#D97706', marginTop:3, flex:'none' }}/>
-                <span style={{ fontSize:12, color:'#4B5563', lineHeight:1.4 }}>{f.text}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div style={{ padding:'10px 18px', borderTop:'1px solid #E8ECF5' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12 }}>
-          <span style={{ padding:'3px 10px', borderRadius:6, fontSize:11, fontWeight:600, background:risk.bg, color:risk.color }}>{risk.label} риск</span>
-          <span style={{ padding:'3px 10px', borderRadius:6, fontSize:11, fontWeight:600, background:(sys?.color||'#666')+'18', color:sys?.color }}>{item.system}</span>
-        </div>
-      </div>
-
-      {aiLoading && (
-        <div style={{ margin:'12px 18px', padding:'12px 14px', borderRadius:12, border:'1px solid #E8ECF5', background:'#F8F9FD', fontSize:12, color:'#9CA3AF' }}>
-          ИИ анализирует данные...
-        </div>
-      )}
-      {aiText && (
-        <div style={{ margin:'4px 18px 16px', padding:'12px 14px', borderRadius:12, border:'1px solid #A5B4FC', background:'rgba(238,242,255,.6)' }}>
-          <div style={{ fontSize:10, color:'#1D4ED8', fontWeight:700, marginBottom:6, letterSpacing:'.5px' }}>ИИ-ПРОГНОЗ</div>
-          <div style={{ fontSize:12, color:'#374151', lineHeight:1.55 }}>{aiText}</div>
-        </div>
-      )}
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0' }}>
+      <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} />
+      <input type="number" min="0" max="100" placeholder="износ %" value={pct}
+        onChange={e => setPct(e.target.value)} style={{ ...inp, width: 80 }} autoFocus />
+      <input placeholder="заметка (необязательно)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inp, width: 180 }} />
+      <button onClick={submit} style={{ fontSize: 12, fontWeight: 600, color: '#FFF', background: '#1D4ED8', border: 'none', borderRadius: 7, padding: '7px 13px', cursor: 'pointer', fontFamily: 'inherit' }}>
+        Сохранить
+      </button>
+      <button onClick={onClose} style={{ fontSize: 12, color: '#6B7280', background: 'none', border: '1px solid #E2E8F0', borderRadius: 7, padding: '7px 11px', cursor: 'pointer', fontFamily: 'inherit' }}>
+        Отмена
+      </button>
     </div>
   )
 }
 
-const cardStyle = { background:'#FFFFFF', border:'1px solid #E8ECF5', borderRadius:14, padding:'16px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }
+function NodeCard({ node, measurements, nextRound, orphan, canRecord, onAddMeasurement }) {
+  const [adding, setAdding] = useState(false)
+  const trend = useMemo(() => linearTrend(measurements), [measurements])
+  const cfg = STATUS_CFG[trend.status]
 
-function WearDevStub() {
   return (
-    <div style={{ display:'flex', height:'100%', background:'#F3F5FA', overflow:'hidden' }}>
-      <div style={{ flex:1, display:'flex', flexDirection:'column', padding:24, gap:18 }}>
-        <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Прогноз износа оборудования</h1>
-          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>ИИ-модель остаточного ресурса на основе наработки и истории отказов</p>
-        </div>
-        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <div style={{ textAlign:'center', maxWidth:400, display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-            </svg>
-            <div style={{ fontSize:15, fontWeight:600, color:'#94A3B8' }}>Прогноз износа в разработке</div>
-            <div style={{ fontSize:13, color:'#CBD5E1', lineHeight:1.6 }}>
-              Прогноз будет рассчитываться на основе данных из ТЗ и истории отказов оборудования — раздел в разработке
-            </div>
-          </div>
-        </div>
+    <div style={{ background: '#FFFFFF', border: '1px solid #E8ECF5', borderRadius: 12, padding: '14px 16px',
+      display: 'flex', flexDirection: 'column', gap: 8, opacity: orphan ? .75 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1117' }}>{node.name}</span>
+        {node.brand && <span style={{ fontSize: 11, color: '#9CA3AF' }}>{node.brand}</span>}
+        {node.qty > 1 && (
+          <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 5, background: '#EEF2FF', color: '#4338CA' }}>
+            парк {node.qty} единиц
+          </span>
+        )}
+        {orphan && (
+          <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 5, background: '#FEE2E2', color: '#B91C1C' }}>
+            узел не найден в текущем ТЗ — замеры сохранены
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 6, background: cfg.bg, color: cfg.color }}>
+          {trend.status === 'accumulating'
+            ? `${cfg.label}: ${trend.count} из ${MIN_MEASUREMENTS}`
+            : cfg.label}
+        </span>
       </div>
+
+      <div style={{ fontSize: 11, color: '#6B7280' }}>{node.systemName}</div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        {trend.lastWear != null && (
+          <div style={{ fontSize: 12, color: '#374151' }}>
+            Износ: <strong style={{ color: trend.lastWear >= WEAR_THRESHOLDS.critical ? '#DC2626' : trend.lastWear >= WEAR_THRESHOLDS.warning ? '#D97706' : '#0D1117' }}>
+              {trend.lastWear}%
+            </strong>
+            <span style={{ color: '#9CA3AF' }}> ({fmtDate(trend.lastDate)})</span>
+          </div>
+        )}
+        {trend.slopePctPerMonth != null && trend.status !== 'accumulating' && trend.status !== 'stable' && (
+          <div style={{ fontSize: 12, color: '#374151' }}>
+            Скорость: <strong>{trend.slopePctPerMonth > 0 ? '+' : ''}{trend.slopePctPerMonth}%/мес</strong>
+          </div>
+        )}
+        {trend.etaCriticalMonths != null && trend.status !== 'stable' && (
+          <div style={{ fontSize: 12, color: cfg.color, fontWeight: 600 }}>
+            До {WEAR_THRESHOLDS.critical}%: {fmtMonths(trend.etaCriticalMonths)}
+          </div>
+        )}
+        {measurements.length >= 2 && <SparkLine measurements={measurements} />}
+      </div>
+
+      {trend.status === 'accumulating' && !orphan && (
+        <div style={{ fontSize: 11, color: '#6B7280' }}>
+          {nextRound
+            ? <>{trend.count + 1}-й обход: <strong>{fmtDate(nextRound)}</strong> (график ЭК системы)</>
+            : 'В графике нет ЭК-задач по системе — вносите замеры вручную'}
+        </div>
+      )}
+
+      {canRecord && !adding && (
+        <button onClick={() => setAdding(true)}
+          style={{ alignSelf: 'flex-start', fontSize: 11, fontWeight: 600, color: '#1D4ED8', background: '#EFF6FF',
+            border: '1px solid #BFDBFE', borderRadius: 7, padding: '4px 11px', cursor: 'pointer', fontFamily: 'inherit' }}>
+          + замер
+        </button>
+      )}
+      {adding && <AddMeasurementForm onClose={() => setAdding(false)}
+        onSave={({ date, wearPct, note }) => onAddMeasurement(node, { date, wearPct, note })} />}
+    </div>
+  )
+}
+
+function WearStub({ text }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 12, color: '#9CA3AF' }}>
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.4">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+      </svg>
+      <div style={{ fontWeight: 600, fontSize: 14, color: '#6B7280', textAlign: 'center', maxWidth: 360, lineHeight: 1.5 }}>{text}</div>
     </div>
   )
 }
 
 export default function WearPrediction() {
-  const { applied } = usePlatformStore()
-  const [selectedId, setSelectedId] = useState(null)
-  const [aiText, setAiText]         = useState(null)
-  const [aiLoading, setAiLoading]   = useState(false)
+  const { applied, systemsData, activeBuildingId } = usePlatformStore()
+  const wearStore    = useWearStore()
+  const staffStore   = useStaffStore()
+  const ticketsStore = useTicketsStore()
+  const session      = useSessionStore()
+  const [inspectMsg, setInspectMsg] = useState(null)
 
-  const sorted = useMemo(() => [...MERGED].sort((a, b) => b.wear - a.wear), [])
+  useEffect(() => { wearStore.loadFromDB(); staffStore.loadFromDB(); ticketsStore.loadFromDB() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stats = useMemo(() => ({
-    avgWear:  Math.round(MERGED.reduce((s, e) => s + e.wear, 0) / MERGED.length),
-    highRisk: MERGED.filter(e => e.probability * e.consequence >= 15).length,
-    planned:  MERGED.filter(e => e.wear >= 70).length,
-  }), [])
+  const actor = { role: session.role, personId: session.personId }
 
-  if (applied) return <WearDevStub />
+  const allNodes = useMemo(() => deriveNodes(systemsData), [systemsData])
+  const nodes = useMemo(() => allNodes.filter(n => n.buildingId === activeBuildingId), [allNodes, activeBuildingId])
 
-  const selected = selectedId ? MERGED.find(e => e.id === selectedId) : null
-
-  async function handleSelect(item) {
-    if (selectedId === item.id) { setSelectedId(null); setAiText(null); return }
-    setSelectedId(item.id)
-    setAiText(null)
-    if (import.meta.env.VITE_ANTHROPIC_API_KEY) {
-      setAiLoading(true)
-      try {
-        const text = await fetchWearPrediction(item, WEAR_DATA.find(w => w.equipmentId === item.id))
-        setAiText(text)
-      } catch { /* ignore */ }
-      finally { setAiLoading(false) }
+  const systemsById = useMemo(() => {
+    const map = new Map()
+    for (const bs of systemsData ?? []) {
+      if (bs.buildingId !== activeBuildingId) continue
+      for (const s of bs.systems ?? []) map.set(s.id, s)
     }
+    return map
+  }, [systemsData, activeBuildingId])
+
+  const measByNode = useMemo(() => {
+    const map = new Map()
+    for (const m of wearStore.measurements) {
+      if (!map.has(m.nodeId)) map.set(m.nodeId, [])
+      map.get(m.nodeId).push(m)
+    }
+    return map
+  }, [wearStore.measurements])
+
+  // Осиротевшие nodeId этого объекта (узел исчез после переприменения ТЗ)
+  const orphanNodes = useMemo(() => {
+    const known = new Set(nodes.map(n => n.nodeId))
+    const seen = new Map()
+    for (const m of wearStore.measurements) {
+      if (m.buildingId === activeBuildingId && !known.has(m.nodeId) && !seen.has(m.nodeId)) {
+        seen.set(m.nodeId, {
+          nodeId: m.nodeId, buildingId: m.buildingId, systemId: null,
+          systemName: '—', category: 'other', class: null,
+          name: `Узел ${m.nodeId}`, brand: null, qty: 1,
+        })
+      }
+    }
+    return [...seen.values()]
+  }, [wearStore.measurements, nodes, activeBuildingId])
+
+  const trends = useMemo(() =>
+    nodes.map(node => ({ node, trend: linearTrend(measByNode.get(node.nodeId) ?? []) })),
+    [nodes, measByNode])
+
+  const recommendations = useMemo(() => purchaseRecommendations(trends), [trends])
+
+  if (!applied) return <WearStub text="Примените данные из Анализа ТЗ — узлы определятся автоматически" />
+
+  async function handleInitialInspection() {
+    const res = await ticketsStore.generateInitialInspections(systemsData, useStaffStore.getState().staff)
+    setInspectMsg(res.created > 0
+      ? `Создано ${res.created} тикетов первичной фиксации — назначены гл. инженеру, см. раздел Тикеты`
+      : 'Тикеты первичной фиксации уже существуют — дубли не созданы')
   }
 
-  const kpiCfg = [
-    { label:'Средний износ парка', value:`${stats.avgWear}%`, color:'#D97706' },
-    { label:'Высокий риск',        value:`${stats.highRisk} ед.`, color:'#DC2626' },
-    { label:'Плановая замена',     value:`${stats.planned} ед.`,  color:'#D97706' },
-  ]
+  function addMeasurement(node, { date, wearPct, note }) {
+    wearStore.addMeasurement({
+      nodeId: node.nodeId, buildingId: node.buildingId, date, wearPct, note,
+      byPersonId: session.personId, source: 'manual',
+    })
+  }
+
+  const canRecord = can(actor, 'recordWear')
+  const statusRank = { urgent: 0, watch: 1, ok: 2, stable: 3, accumulating: 4 }
 
   return (
-    <div style={{ display:'flex', height:'100%', background:'#F3F5FA', overflow:'hidden' }}>
-      <div style={{ flex:1, display:'flex', flexDirection:'column', padding:24, gap:18, overflow:'hidden' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: 24, background: '#F3F5FA' }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-        {/* Header */}
-        <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>Прогноз износа оборудования</h1>
-          <p style={{ margin:'6px 0 0', fontSize:13, color:'#6B7280' }}>ИИ-модель остаточного ресурса на основе наработки и истории отказов</p>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Прогноз износа</h1>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#6B7280' }}>
+              {nodes.length} узлов · тренд по замерам (мин. {MIN_MEASUREMENTS}) · пороги {WEAR_THRESHOLDS.warning}/{WEAR_THRESHOLDS.critical}%
+            </p>
+          </div>
+          {can(actor, 'runInitialInspection') && (
+            <button onClick={handleInitialInspection}
+              style={{ padding: '10px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600, color: '#FFFFFF', border: 'none',
+                cursor: 'pointer', fontFamily: 'inherit', background: 'linear-gradient(135deg,#1D4ED8,#7C3AED)' }}>
+              Запустить первичную фиксацию износа
+            </button>
+          )}
         </div>
 
-        {/* KPIs */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
-          {kpiCfg.map(k => (
-            <div key={k.label} style={cardStyle}>
-              <div style={{ fontSize:11, color:'#6B7280', marginBottom:10, fontWeight:500 }}>{k.label}</div>
-              <div style={{ fontSize:28, fontWeight:700, color:k.color, fontFamily:"'JetBrains Mono',monospace" }}>{k.value}</div>
+        {inspectMsg && (
+          <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '10px 14px', fontSize: 12, color: '#0369A1' }}>
+            {inspectMsg}
+          </div>
+        )}
+
+        {/* Рекомендации закупки — замыкание на ЗИП */}
+        {recommendations.length > 0 && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400E' }}>
+              Рекомендуется закупка ({recommendations.length})
             </div>
+            {recommendations.map(r => (
+              <div key={r.nodeId} style={{ fontSize: 12, color: '#78350F', lineHeight: 1.6 }}>
+                <strong>{r.nodeName}</strong>
+                {r.etaDate && <> — к дате <strong>{fmtDate(r.etaDate)}</strong></>}
+                <span style={{ color: '#B45309' }}> · {STATUS_CFG[r.status].label}</span>
+                <div style={{ color: '#92400E' }}>{r.items.join(' · ')}</div>
+                <span style={{ fontSize: 10, color: '#D6A22A' }}>источник: прогноз износа</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {nodes.length === 0 && orphanNodes.length === 0 && (
+          <WearStub text="В оборудовании применённого ТЗ нет трекаемых узлов" />
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {[...trends]
+            .sort((a, b) => (statusRank[a.trend.status] ?? 9) - (statusRank[b.trend.status] ?? 9))
+            .map(({ node }) => (
+              <NodeCard key={node.nodeId}
+                node={node}
+                measurements={measByNode.get(node.nodeId) ?? []}
+                nextRound={node.systemId ? nextRoundDate(systemsById.get(node.systemId), node.buildingId) : null}
+                orphan={false}
+                canRecord={canRecord}
+                onAddMeasurement={addMeasurement}
+              />
+            ))}
+
+          {orphanNodes.map(node => (
+            <NodeCard key={node.nodeId}
+              node={node}
+              measurements={measByNode.get(node.nodeId) ?? []}
+              nextRound={null}
+              orphan
+              canRecord={canRecord}
+              onAddMeasurement={addMeasurement}
+            />
           ))}
         </div>
-
-        {/* Table */}
-        <div style={{ flex:1, overflow:'auto', background:'#FFFFFF', border:'1px solid #E8ECF5', borderRadius:14, boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1.5fr 1fr 1fr', padding:'12px 18px', fontSize:10, letterSpacing:'.5px', textTransform:'uppercase', color:'#9CA3AF', borderBottom:'1px solid #E8ECF5', background:'#F8F9FD', fontWeight:600, position:'sticky', top:0, zIndex:1 }}>
-            {['Название','Система','Износ','Риск аварии','Остаток ресурса'].map(h => <span key={h}>{h}</span>)}
-          </div>
-          {sorted.map(item => {
-            const sys  = SYSTEMS[item.system]
-            const risk = riskLabel(item.probability, item.consequence)
-            const isSel = item.id === selectedId
-            return (
-              <div key={item.id}
-                onClick={() => handleSelect(item)}
-                style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1.5fr 1fr 1fr', padding:'13px 18px', fontSize:13, alignItems:'center', borderBottom:'1px solid #F0F2FA', cursor:'pointer', background: isSel ? '#EEF2FF' : undefined, transition:'background .1s' }}
-                onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = '#F8F9FD' }}
-                onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = '' }}
-              >
-                <span style={{ display:'flex', alignItems:'center', gap:9 }}>
-                  {isSel && <span style={{ width:3, height:20, borderRadius:2, background:'#1D4ED8', flex:'none' }}/>}
-                  <span style={{ fontWeight:500, color:'#0D1117' }}>{item.name}</span>
-                </span>
-                <span>
-                  <span style={{ padding:'3px 10px', borderRadius:6, fontSize:11, fontWeight:600, background:(sys?.color||'#666')+'18', color:sys?.color }}>{item.system}</span>
-                </span>
-                <span style={{ display:'flex', alignItems:'center', gap:10 }}>
-                  <div style={{ flex:1, height:6, borderRadius:4, background:'#F0F2FA', minWidth:60, overflow:'hidden' }}>
-                    <div style={{ height:'100%', borderRadius:4, background:wearColor(item.wear), width:`${item.wear}%` }}/>
-                  </div>
-                  <span style={{ fontSize:12, fontWeight:700, color:wearColor(item.wear), fontFamily:"'JetBrains Mono',monospace", minWidth:32 }}>{item.wear}%</span>
-                </span>
-                <span>
-                  <span style={{ padding:'3px 10px', borderRadius:6, fontSize:11, fontWeight:600, background:risk.bg, color:risk.color }}>{risk.label}</span>
-                </span>
-                <span style={{ color:'#6B7280', fontFamily:"'JetBrains Mono',monospace" }}>{remainingResource(item.wear)}</span>
-              </div>
-            )
-          })}
-        </div>
       </div>
-
-      {selected && (
-        <DetailPanel
-          item={selected}
-          onClose={() => { setSelectedId(null); setAiText(null) }}
-          aiText={aiText}
-          aiLoading={aiLoading}
-        />
-      )}
     </div>
   )
 }
