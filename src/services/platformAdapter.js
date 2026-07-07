@@ -42,16 +42,27 @@ export function mapSystemsData(tzSystems, now = new Date().toISOString()) {
         systemName:  sysName,        // used by Dashboard systemsDistribution
         category:    sysCat,
         needsReview: sys.needsReview ?? false,
-        maintenanceTasks: (sys.maintenanceTasks ?? []).map(t => ({
-          id:          contentHash(`${s.buildingId}|${sysCat}|${t.operation ?? ''}|${t.mode ?? ''}`),
-          mode:        t.mode        ?? null,
-          operation:   t.operation   ?? null,
-          opNum:       t.opNum       ?? null,
-          periodicity: t.periodicity ?? null,
-          months:      t.months      ?? [],
-          needsReview:  false,
-          editedByUser: false,
-        })),
+        // Одинаковая формулировка операции может повторяться внутри системы
+        // (разные под-секции оборудования в графике) — коллизию id разрешаем
+        // детерминированным суффиксом #n; первый экземпляр сохраняет прежний id.
+        maintenanceTasks: (() => {
+          const seen = new Map()
+          return (sys.maintenanceTasks ?? []).map(t => {
+            const base = `${s.buildingId}|${sysCat}|${t.operation ?? ''}|${t.mode ?? ''}`
+            const n = seen.get(base) ?? 0
+            seen.set(base, n + 1)
+            return {
+              id:          contentHash(n === 0 ? base : `${base}|#${n}`),
+              mode:        t.mode        ?? null,
+              operation:   t.operation   ?? null,
+              opNum:       t.opNum       ?? null,
+              periodicity: t.periodicity ?? null,
+              months:      t.months      ?? [],
+              needsReview:  false,
+              editedByUser: false,
+            }
+          })
+        })(),
         equipment: (sys.equipment ?? []).map(eq => ({
           id:          contentHash(`${s.buildingId}|${sysCat}|${eq.name ?? ''}|${eq.class ?? ''}`),
           name:        eq.name      ?? null,

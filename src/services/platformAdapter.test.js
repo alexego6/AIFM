@@ -376,3 +376,24 @@ describe('upsertSystemsData — стейл-записи со старыми ID',
     expect(result[0].systems[0].maintenanceTasks[0].needsReview).toBe(false)
   })
 })
+
+describe('mapSystemsData — коллизии taskId (повтор операции в системе)', () => {
+  it('одинаковые операции получают уникальные детерминированные id, первый — прежний', () => {
+    const tz = [{
+      buildingId: 'b1',
+      systems: [{
+        name: 'АПТ', category: 'fire',
+        maintenanceTasks: [
+          { operation: 'измерение давления', mode: 'EK', periodicity: 'ежедневно', months: [] },
+          { operation: 'измерение давления', mode: 'EK', periodicity: 'ежедневно', months: [] },
+          { operation: 'измерение давления', mode: 'EK', periodicity: 'ежедневно', months: [] },
+        ],
+      }],
+    }]
+    const out1 = mapSystemsData(tz)[0].systems[0].maintenanceTasks
+    const out2 = mapSystemsData(tz)[0].systems[0].maintenanceTasks
+    const ids = out1.map(t => t.id)
+    expect(new Set(ids).size).toBe(3)                       // все уникальны
+    expect(out2.map(t => t.id)).toEqual(ids)                // детерминизм
+  })
+})
