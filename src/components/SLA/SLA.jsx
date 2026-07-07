@@ -127,7 +127,8 @@ export default function SLA() {
   }, {})
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: 900, margin: '0 auto' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto' }}>
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>SLA — Соглашение об уровне обслуживания</div>
         <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
@@ -179,6 +180,7 @@ export default function SLA() {
           SLA-данные обнаружены, но не содержат извлекаемых позиций
         </div>
       )}
+      </div>
     </div>
   )
 }
