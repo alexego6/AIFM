@@ -20,6 +20,7 @@ async function callClaude(prompt, maxTokens = 4096) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
       max_tokens: maxTokens,
+      temperature: 0,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
@@ -152,6 +153,63 @@ ${SCHEMA_EXAMPLE}
 КОНТЕКСТ (начало документа ТЗ):
 ${context}`
 
+// ── Address-based dedup (детерминированный, после консолидации модели) ──────
+// Модель иногда «разводит» один объект на два (ЦДМ ↔ «Нежилое здание на ул. Луговая»).
+// Адрес — надёжный ключ идентичности: улица + дом + корпус/строение.
+// Нормализуем и мержим записи с одинаковым ключом кодом, не доверяя модели.
+export function normalizeAddressKey(address) {
+  if (typeof address !== 'string') return null
+  const s = address.toLowerCase().replace(/ё/g, 'е')
+  const street = s.match(/(?:ул(?:ица)?|пр(?:оспект|-кт)?|пер(?:еулок)?|ш(?:оссе)?|наб(?:ережная)?|б(?:ульвар|-р)?)\.?\s*([а-я\d\s-]+?)(?=,|$|\s+д\b|\s+дом\b)/)
+  const house = s.match(/(?:д|дом)\.?\s*(\d+[а-я]?)/)
+  const korpus = s.match(/(?:корп(?:ус)?|к|стр(?:оение)?|с)\.?\s*(\d+[а-я]?)/)
+  if (!street || !house) return null
+  const key = [street[1].replace(/[\s-]+/g, ''), house[1], korpus ? korpus[1] : '']
+  return key.join('|')
+}
+
+function mergeBuildingPair(a, b) {
+  // Более информативная запись — база; всё непустое из второй — доливаем.
+  const score = x => [x.areaSqm, x.address, x.floors, x.year_built, x.purpose]
+    .filter(v => v !== null && v !== undefined).length
+  const [base, extra] = score(b) > score(a) ? [b, a] : [a, b]
+  const merged = { ...base }
+  for (const k of ['address', 'floors', 'areaSqm', 'territoryAreaSqm', 'year_built', 'purpose']) {
+    if (merged[k] === null || merged[k] === undefined) merged[k] = extra[k] ?? null
+  }
+  // Более полное официальное название (длиннее — обычно полнее)
+  if (typeof extra.name === 'string' && extra.name.length > (merged.name?.length ?? 0)) {
+    merged.name = extra.name
+  }
+  const subs = [...(Array.isArray(base.sub_buildings) ? base.sub_buildings : []),
+                ...(Array.isArray(extra.sub_buildings) ? extra.sub_buildings : [])]
+  merged.sub_buildings = [...new Set(subs)]
+  // Конфликт площадей двух источников — на ручную проверку
+  if (typeof a.areaSqm === 'number' && typeof b.areaSqm === 'number' && a.areaSqm !== b.areaSqm) {
+    merged.needsReview = true
+  }
+  return merged
+}
+
+export function dedupBuildingsByAddress(buildings) {
+  const byKey = new Map()
+  const out = []
+  for (const b of buildings) {
+    const key = normalizeAddressKey(b.address)
+    if (key === null) { out.push(b); continue }
+    if (byKey.has(key)) {
+      const idx = out.indexOf(byKey.get(key))
+      const merged = mergeBuildingPair(out[idx], b)
+      out[idx] = merged
+      byKey.set(key, merged)
+    } else {
+      byKey.set(key, b)
+      out.push(b)
+    }
+  }
+  return out
+}
+
 // ── Sub-building area parser ─────────────────────────────────────────────────
 // Extracts floor area (кв.м) from sub_building name strings like
 // "АХК 1 (3 эт., 2123,2 кв.м, кад. №...)" → 2123.2
@@ -241,6 +299,9 @@ export async function runStage1(chunks, onProgress) {
       buildings = JSON.parse(raw)
     } catch { /* оставляем кандидатов как есть */ }
   }
+
+  // Страховка кодом: модель не имеет права держать два объекта на одном адресе
+  buildings = dedupBuildingsByAddress(buildings)
 
   onProgress?.(100, totalSteps, totalSteps)
 

@@ -16,7 +16,7 @@ vi.stubGlobal('fetch', mockFetch)
 vi.stubEnv('VITE_ANTHROPIC_API_KEY', 'test-key')
 
 // Import after mocking
-const { runStage1 } = await import('./tzPipeline')
+const { runStage1, normalizeAddressKey, dedupBuildingsByAddress } = await import('./tzPipeline')
 
 function makeClaudeResponse(text) {
   return {
@@ -210,5 +210,74 @@ describe('runStage1', () => {
     expect(result[0].sub_buildings).not.toContain('')
     expect(result[0].sub_buildings).not.toContain(null)
     expect(result[0].sub_buildings).not.toContain('   ')
+  })
+})
+
+describe('normalizeAddressKey', () => {
+  it('extracts street + house + korpus', () => {
+    expect(normalizeAddressKey('г. Москва, Одинцовский р-н, г. Одинцово, ул. Луговая, д. 4, корпус 6'))
+      .toBe('луговая|4|6')
+  })
+
+  it('matches same address written differently', () => {
+    const a = normalizeAddressKey('ул. Луговая, д. 4, корпус 6')
+    const b = normalizeAddressKey('улица Луговая, дом 4, корп. 6')
+    expect(a).not.toBeNull()
+    expect(a).toBe(b)
+  })
+
+  it('different korpus → different keys', () => {
+    expect(normalizeAddressKey('ул. Нобеля, д. 7, корпус 1'))
+      .not.toBe(normalizeAddressKey('ул. Нобеля, д. 7, корпус 2'))
+  })
+
+  it('null for missing house or non-string', () => {
+    expect(normalizeAddressKey('МО, Одинцовский р-н')).toBeNull()
+    expect(normalizeAddressKey(null)).toBeNull()
+  })
+})
+
+describe('dedupBuildingsByAddress', () => {
+  const CDM = {
+    id: 'b5', name: 'ЦДМ',
+    address: 'г. Одинцово, ул. Луговая, д. 4, корпус 6',
+    floors: 3, areaSqm: 1513, territoryAreaSqm: null,
+    year_built: 2016, purpose: 'бытовое нежилое здание',
+    needsReview: false, sub_buildings: [],
+  }
+  const GHOST = {
+    id: 'b6', name: 'Нежилое здание на ул. Луговая (Объект «Нежилое здание»)',
+    address: 'г. Москва, Одинцовский р-н, г. Одинцово, ул. Луговая, д. 4, корпус 6',
+    floors: 3, areaSqm: 1513, territoryAreaSqm: null,
+    year_built: null, purpose: 'бытовое нежилое здание',
+    needsReview: false, sub_buildings: [],
+  }
+
+  it('merges two records with the same address into one (ЦДМ case)', () => {
+    const result = dedupBuildingsByAddress([CDM, GHOST])
+    expect(result).toHaveLength(1)
+    expect(result[0].areaSqm).toBe(1513)
+    expect(result[0].year_built).toBe(2016)
+  })
+
+  it('keeps buildings with different or missing addresses intact', () => {
+    const other = { ...CDM, id: 'b1', name: 'КМ-1', address: 'ул. Нобеля, д. 7, корпус 1' }
+    const noAddr = { ...CDM, id: 'b2', name: 'Усадьба', address: null }
+    const result = dedupBuildingsByAddress([other, noAddr, CDM])
+    expect(result).toHaveLength(3)
+  })
+
+  it('flags needsReview when merged records disagree on areaSqm', () => {
+    const conflict = { ...GHOST, areaSqm: 1600 }
+    const result = dedupBuildingsByAddress([CDM, conflict])
+    expect(result).toHaveLength(1)
+    expect(result[0].needsReview).toBe(true)
+  })
+
+  it('unions sub_buildings without duplicates', () => {
+    const a = { ...CDM, sub_buildings: ['Пристройка'] }
+    const b = { ...GHOST, sub_buildings: ['Пристройка', 'КПП'] }
+    const result = dedupBuildingsByAddress([a, b])
+    expect(result[0].sub_buildings.sort()).toEqual(['КПП', 'Пристройка'])
   })
 })
