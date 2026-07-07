@@ -136,8 +136,6 @@ function WearDevStub() {
 export default function WearPrediction() {
   const { applied } = usePlatformStore()
   const [selectedId, setSelectedId] = useState(null)
-
-  if (applied) return <WearDevStub />
   const [aiText, setAiText]         = useState(null)
   const [aiLoading, setAiLoading]   = useState(false)
 
@@ -148,6 +146,8 @@ export default function WearPrediction() {
     highRisk: MERGED.filter(e => e.probability * e.consequence >= 15).length,
     planned:  MERGED.filter(e => e.wear >= 70).length,
   }), [])
+
+  if (applied) return <WearDevStub />
 
   const selected = selectedId ? MERGED.find(e => e.id === selectedId) : null
 
