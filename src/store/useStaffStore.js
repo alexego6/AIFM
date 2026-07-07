@@ -37,12 +37,23 @@ export function specialtyOf(person) {
 // ── Сид из staffingPlan ───────────────────────────────────────────────────────
 // staffingPlan: [{buildingId, roles: [{id: engineer|technician|watchman, stavka, ...}], numWatchPos}]
 // Суточник: numWatchPos позиций × 4 смены = 4 персоны на позицию (сутки/трое).
+// Fallback для планов без roles[] (старые applied-данные / фикстуры до 07.07):
+// синтезируем роли из числовых полей numEngineers/numTechnicians/watchStavki.
+function rolesOf(plan) {
+  if (plan.roles?.length) return plan.roles
+  const roles = []
+  if (plan.numEngineers > 0)   roles.push({ id: 'engineer',   role: 'Инженер по эксплуатации', stavka: plan.numEngineers })
+  if (plan.numTechnicians > 0) roles.push({ id: 'technician', role: 'Техник-универсал',        stavka: plan.numTechnicians })
+  if (plan.watchStavki > 0)    roles.push({ id: 'watchman',   role: 'Дежурный (суточник)',     stavka: plan.watchStavki })
+  return roles
+}
+
 export function seedFromStaffingPlan(staffingPlan) {
   const staff = []
   for (const plan of staffingPlan ?? []) {
     const b = plan.buildingId
     if (!b) continue
-    for (const role of plan.roles ?? []) {
+    for (const role of rolesOf(plan)) {
       if (role.id === 'watchman') {
         const positions = plan.numWatchPos ?? Math.max(1, Math.round((role.stavka ?? 4) / 4))
         for (let p = 1; p <= positions; p++) {

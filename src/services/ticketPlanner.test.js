@@ -181,3 +181,14 @@ describe('reassignAfterRemoval — инвариант 5', () => {
     expect(out.find(t => t.id === otherT.id).assigneeId).toBe(techB.id)  // чужой ручной — нетронут
   })
 })
+
+describe('seedFromStaffingPlan — fallback без roles[] (старые данные/фикстура)', () => {
+  it('синтезирует роли из числовых полей', () => {
+    const s = seedFromStaffingPlan([{
+      buildingId: 'b3', numEngineers: 1, numTechnicians: 2, watchStavki: 4,
+    }])
+    expect(s.filter(p => p.kind === 'engineer')).toHaveLength(1)
+    expect(s.filter(p => p.kind === 'technician')).toHaveLength(2)
+    expect(s.filter(p => p.kind === 'watchman')).toHaveLength(4) // 1 позиция × 4 смены
+  })
+})
